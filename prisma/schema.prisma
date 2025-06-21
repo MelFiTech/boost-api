@@ -1,0 +1,303 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  username      String?   @unique
+  isGuest       Boolean   @default(false)
+  otp           String?   // Current OTP
+  otpExpiry     DateTime? // OTP expiration timestamp
+  isVerified    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  orders        Order[]
+  deviceTokens  DeviceToken[]
+  notifications UserNotification[]
+  
+  @@map("users")
+}
+
+model Platform {
+  id        String   @id @default(cuid())
+  name      String   
+  slug      String   
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  services  Service[]
+  categories Category[]
+  orders    Order[]
+
+  @@unique([name])
+  @@unique([slug])
+  @@map("platforms")
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String
+  platformId  String
+  platform    Platform @relation(fields: [platformId], references: [id])
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  services    Service[]
+
+  @@unique([platformId, slug])
+  @@map("categories")
+}
+
+model ServiceProvider {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g., "SMMStone", "SMMLab", "SMMKing"
+  slug        String   @unique // e.g., "smmstone", "smmlab", "smmking"
+  apiUrl      String   // Provider's API URL
+  apiKey      String   // Provider's API key
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  services    Service[]
+
+  @@map("service_providers")
+}
+
+model Service {
+  id            String          @id @default(cuid())
+  serviceId     String          // from provider
+  name          String
+  type          String
+  providerRate  Float           // Original rate in USDT
+  boostRate     Float           // Our marked up rate in USDT
+  minOrder      Int
+  maxOrder      Int
+  platformId    String
+  platform      Platform        @relation(fields: [platformId], references: [id])
+  categoryId    String
+  category      Category        @relation(fields: [categoryId], references: [id])
+  providerId    String          // Which provider handles this service
+  provider      ServiceProvider @relation(fields: [providerId], references: [id])
+  dripfeed     Boolean         @default(false)
+  refill       Boolean         @default(false)
+  cancel       Boolean         @default(false)
+  active       Boolean         @default(true)
+  lastChecked  DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  orders       Order[]
+
+  @@unique([serviceId, providerId]) // Same service ID can exist across different providers
+  @@map("services")
+}
+
+model Order {
+  id              String    @id @default(cuid())
+  userId          String?
+  platformId      String
+  serviceId       String
+  quantity        Int
+  link            String
+  status          OrderStatus @default(PENDING)
+  price           Float
+  providerOrderId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  user            User?       @relation(fields: [userId], references: [id])
+  platform        Platform    @relation(fields: [platformId], references: [id])
+  service         Service     @relation(fields: [serviceId], references: [id])
+  payment         Payment?
+  notifications   UserNotification[]
+
+  @@map("orders")
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  orderId         String        @unique
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("NGN")
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  gatewayRef      String?       // Payment gateway reference
+  cryptoAmount    Decimal?      @db.Decimal(18, 8) // For crypto payments
+  exchangeRate    Decimal?      @db.Decimal(10, 2) // NGN to crypto rate
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  order           Order         @relation(fields: [orderId], references: [id])
+  transactions    Transaction[]
+  
+  @@map("payments")
+}
+
+model Transaction {
+  id                String            @id @default(cuid())
+  paymentId         String
+  budpayReference   String            @unique // BudPay's transaction reference
+  ourReference      String            // Our internal reference
+  amount            Decimal           @db.Decimal(10, 2)
+  currency          String            @default("NGN")
+  status            TransactionStatus @default(PENDING)
+  budpayStatus      String?           // Raw status from BudPay
+  accountNumber     String?           // Virtual account number used
+  bankName          String?           // Bank name
+  customerEmail     String?           // Customer email from BudPay
+  narration         String?           // Transaction narration
+  sessionId         String?           // BudPay session ID
+  paidAt            DateTime?         // When payment was completed
+  webhookReceived   Boolean           @default(false)
+  webhookData       Json?             // Raw webhook data
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  payment           Payment           @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  
+  @@map("transactions")
+}
+
+enum PaymentMethod {
+  NGN
+  CRYPTO
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+model DeviceToken {
+  id          String   @id @default(cuid())
+  userId      String?  // Can be null for guest users
+  token       String   @unique
+  platform    DevicePlatform
+  deviceInfo  Json?    // Device model, OS version, app version, etc.
+  isActive    Boolean  @default(true)
+  lastUsed    DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("device_tokens")
+}
+
+model NotificationTemplate {
+  id          String            @id @default(cuid())
+  name        String            @unique // e.g., "order_confirmed", "payment_received"
+  title       String
+  body        String
+  type        NotificationType
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  
+  notifications UserNotification[]
+  
+  @@map("notification_templates")
+}
+
+model UserNotification {
+  id              String               @id @default(cuid())
+  userId          String?              // Can be null for guest users
+  templateId      String?              // Can be null for custom notifications
+  title           String
+  body            String
+  data            Json?                // Custom data payload
+  type            NotificationType
+  status          NotificationStatus   @default(PENDING)
+  sentAt          DateTime?
+  readAt          DateTime?
+  clickedAt       DateTime?
+  failureReason   String?
+  retryCount      Int                  @default(0)
+  maxRetries      Int                  @default(3)
+  orderId         String?              // Associated order if applicable
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  
+  user            User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template        NotificationTemplate? @relation(fields: [templateId], references: [id])
+  order           Order?               @relation(fields: [orderId], references: [id])
+  
+  @@map("user_notifications")
+}
+
+model WebhookLog {
+  id              String        @id @default(cuid())
+  provider        String        // e.g., "budpay", "paystack", "crypto"
+  event           String        // e.g., "payment.successful", "payment.failed"
+  payload         Json          // Full webhook payload
+  headers         Json?         // Request headers
+  processed       Boolean       @default(false)
+  processingError String?       // Error message if processing failed
+  paymentId       String?       // Associated payment if found
+  orderId         String?       // Associated order if found
+  transactionId   String?       // Created transaction if any
+  ipAddress       String?       // Source IP for security
+  userAgent       String?       // User agent for debugging
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@map("webhook_logs")
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+  EXPO
+}
+
+enum NotificationType {
+  ORDER_UPDATE
+  PAYMENT_UPDATE
+  SYSTEM_ALERT
+  PROMOTIONAL
+  SECURITY
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+
