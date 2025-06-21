@@ -70,3 +70,13 @@ test_*.js
 *.test.ts
 test/
 /test
+
+# Yarn files - keep necessary files for deployment
+.yarn/*
+!.yarn/cache
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*

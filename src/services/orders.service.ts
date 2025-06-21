@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto, PaymentMethod, OrderPlatform, ServiceType } from '../dto/create-order.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { ResendService } from './resend.service';
 
 @Injectable()
 export class OrdersService {
@@ -10,7 +11,8 @@ export class OrdersService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly resendService: ResendService,
   ) {}
 
   async calculateServicePricing(platform: string, service: string, quantity: number, currency: string = 'NGN') {
@@ -373,6 +375,11 @@ export class OrdersService {
         return { order, payment };
       });
 
+      // Send order confirmation email (non-blocking)
+      this.sendOrderStatusEmail(result.order.id, 'pending').catch(error => {
+        this.logger.warn(`Failed to send order confirmation email for order ${result.order.id}:`, error);
+      });
+
       // Return formatted response
       return {
         id: result.order.id,
@@ -584,5 +591,99 @@ export class OrdersService {
       message: `Cleaned up ${deletedCount} expired orders older than ${daysOld} days`,
       deletedCount
     };
+  }
+
+  /**
+   * Send order status email to user
+   */
+  private async sendOrderStatusEmail(orderId: string, status: 'pending' | 'processing' | 'completed' | 'cancelled' | 'partial') {
+    try {
+      // Get order details with user information
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          platform: true,
+          service: true,
+          payment: true,
+          // Note: We don't have user relationship in Order model yet
+          // For now, we'll skip email sending until user relationship is established
+        }
+      });
+
+      if (!order) {
+        this.logger.warn(`Order ${orderId} not found for email notification`);
+        return;
+      }
+
+      // TODO: Add user relationship to Order model to get user email
+      // For now, we'll log that we would send an email
+      this.logger.debug(`Would send ${status} email for order ${orderId} (${order.service.name})`);
+
+      // Uncomment when user relationship is added:
+      /*
+      if (order.user?.email) {
+        const emailResult = await this.resendService.sendOrderStatusEmail({
+          email: order.user.email,
+          orderData: {
+            orderId: order.id,
+            serviceName: order.service.name,
+            platform: order.platform.name,
+            quantity: order.quantity,
+            status: status,
+            userName: order.user.name,
+            targetUrl: order.link,
+          }
+        });
+
+        if (emailResult.success) {
+          this.logger.log(`Order status email sent for order ${orderId}. Message ID: ${emailResult.messageId}`);
+        } else {
+          this.logger.error(`Failed to send order status email for order ${orderId}: ${emailResult.error}`);
+        }
+      }
+      */
+    } catch (error) {
+      this.logger.error(`Error sending order status email for order ${orderId}:`, error);
+    }
+  }
+
+  /**
+   * Update order status and send notification email
+   */
+  async updateOrderStatus(orderId: string, status: 'pending' | 'processing' | 'completed' | 'cancelled' | 'partial', adminNotes?: string) {
+    try {
+      const updatedOrder = await this.prisma.order.update({
+        where: { id: orderId },
+        data: {
+          status: status.toUpperCase() as any,
+          updatedAt: new Date(),
+          // Add admin notes if provided
+          ...(adminNotes && { adminNotes })
+        },
+        include: {
+          platform: true,
+          service: true,
+          payment: true,
+        }
+      });
+
+      // Send status update email
+      await this.sendOrderStatusEmail(orderId, status);
+
+      this.logger.log(`Order ${orderId} status updated to ${status}`);
+
+      return {
+        id: updatedOrder.id,
+        status: updatedOrder.status.toLowerCase(),
+        platform: updatedOrder.platform.name,
+        service: updatedOrder.service.name,
+        quantity: updatedOrder.quantity,
+        price: updatedOrder.price,
+        updatedAt: updatedOrder.updatedAt.toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to update order status for ${orderId}:`, error);
+      throw new BadRequestException('Failed to update order status');
+    }
   }
 } 

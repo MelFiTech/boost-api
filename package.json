@@ -12,6 +12,13 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "postbuild": "prisma generate",
+    "prebuild": "rimraf dist",
+    "prestart:prod": "yarn build",
+    "deploy": "yarn install --frozen-lockfile && yarn build && yarn start:prod",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "ts-node prisma/seed.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -38,6 +45,7 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.0",
+    "resend": "^4.6.0",
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1"
   },
@@ -59,6 +67,7 @@
     "jest": "^29.5.0",
     "prettier": "^3.0.0",
     "prisma": "^6.9.0",
+    "rimraf": "^6.0.1",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.1.0",
@@ -83,5 +92,6 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
-  }
+  },
+  "packageManager": "yarn@4.9.2"
 }

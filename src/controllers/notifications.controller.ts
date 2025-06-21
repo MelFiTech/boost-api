@@ -22,6 +22,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { OptionalAuthGuard } from '../auth/guards/optional-auth.guard';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 
 @ApiTags('notifications')
 @Controller('notifications')
@@ -31,6 +32,7 @@ export class NotificationsController {
   constructor(
     private readonly notificationService: NotificationService,
     private readonly expoPushService: ExpoPushService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Get('status')
@@ -166,8 +168,9 @@ export class NotificationsController {
       }
     }
   })
-  async sendNotification(@Body() sendNotificationDto: SendNotificationDto) {
-    return this.notificationService.sendNotification(sendNotificationDto);
+  async sendNotification(@Body() dto: SendNotificationDto) {
+    const result = await this.notificationService.sendNotification(dto);
+    return result;
   }
 
   @Get('user/:userId')
@@ -186,14 +189,13 @@ export class NotificationsController {
   })
   async getUserNotifications(
     @Param('userId') userId: string,
-    @Query('limit') limit: string = '50',
-    @Query('offset') offset: string = '0'
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '10',
   ) {
-    return this.notificationService.getUserNotifications(
-      userId,
-      parseInt(limit),
-      parseInt(offset)
-    );
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    
+    return this.notificationService.getUserNotifications(userId, pageNum, limitNum);
   }
 
   @Post('mark')
@@ -204,5 +206,87 @@ export class NotificationsController {
   })
   async markNotification(@Body() markNotificationDto: MarkNotificationDto) {
     return this.notificationService.markNotification(markNotificationDto);
+  }
+
+  // Email testing endpoints
+  @Post('email/test-otp')
+  async testOtpEmail(@Body() dto: { email: string; userName?: string }) {
+    // Import ResendService here to avoid circular dependency
+    const { ResendService } = await import('../services/resend.service');
+    const resendService = new ResendService(this.configService);
+    
+    const otp = resendService.generateOtp();
+    const result = await resendService.sendOtpEmail({
+      email: dto.email,
+      otp,
+      userName: dto.userName,
+    });
+
+    return {
+      success: result.success,
+      message: result.success ? 'OTP email sent successfully' : 'Failed to send OTP email',
+      otp: process.env.NODE_ENV === 'development' ? otp : undefined,
+      messageId: result.messageId,
+      error: result.error,
+    };
+  }
+
+  @Post('email/test-welcome')
+  async testWelcomeEmail(@Body() dto: { email: string; userName: string }) {
+    const { ResendService } = await import('../services/resend.service');
+    const resendService = new ResendService(this.configService);
+    
+    const result = await resendService.sendWelcomeEmail({
+      email: dto.email,
+      userName: dto.userName,
+    });
+
+    return {
+      success: result.success,
+      message: result.success ? 'Welcome email sent successfully' : 'Failed to send welcome email',
+      messageId: result.messageId,
+      error: result.error,
+    };
+  }
+
+  @Post('email/test-order-status')
+  async testOrderStatusEmail(@Body() dto: { 
+    email: string; 
+    userName?: string;
+  }) {
+    const { ResendService } = await import('../services/resend.service');
+    const resendService = new ResendService(this.configService);
+    
+    const result = await resendService.sendOrderStatusEmail({
+      email: dto.email,
+      orderData: {
+        orderId: 'TEST-12345',
+        serviceName: 'Instagram Followers',
+        platform: 'Instagram',
+        quantity: 1000,
+        status: 'completed',
+        userName: dto.userName || 'Test User',
+        targetUrl: 'https://instagram.com/example',
+        orderDate: new Date(),
+        completedDate: new Date(),
+        progress: 100,
+        notes: 'This is a test order status email.'
+      }
+    });
+
+    return {
+      success: result.success,
+      message: result.success ? 'Order status email sent successfully' : 'Failed to send order status email',
+      messageId: result.messageId,
+      error: result.error,
+    };
+  }
+
+  @Get('email/status')
+  async getEmailServiceStatus() {
+    const { ResendService } = await import('../services/resend.service');
+    const resendService = new ResendService(this.configService);
+    
+    return resendService.getStatus();
   }
 } 
