@@ -13,7 +13,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "postbuild": "prisma generate",
-    "prebuild": "rimraf dist",
+    "prebuild": "rimraf dist && yarn prisma generate",
     "prestart:prod": "yarn build",
     "deploy": "yarn install --frozen-lockfile && yarn build && yarn start:prod",
     "db:generate": "prisma generate",

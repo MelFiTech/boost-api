@@ -12,7 +12,7 @@ COPY package.json yarn.lock .yarnrc.yml ./
 COPY .yarn ./.yarn
 
 # Install dependencies
-RUN yarn install --frozen-lockfile --production=false
+RUN yarn install --frozen-lockfile
 
 # Copy source code
 COPY . .
@@ -27,7 +27,7 @@ RUN yarn build
 FROM node:18-alpine AS production
 
 # Install dependencies needed for runtime
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl curl
 
 # Create app directory
 WORKDIR /app
@@ -41,7 +41,7 @@ COPY package.json yarn.lock .yarnrc.yml ./
 COPY .yarn ./.yarn
 
 # Install only production dependencies
-RUN yarn install --frozen-lockfile --production=true
+RUN yarn install --frozen-lockfile --production
 
 # Copy built application
 COPY --from=base /app/dist ./dist
