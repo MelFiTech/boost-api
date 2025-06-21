@@ -9,6 +9,8 @@ Your deployment platform needs these environment variables configured:
 DATABASE_URL=postgresql://username:password@host:port/database_name
 ```
 
+**Important**: Replace `host` with your actual database host (not `localhost`). For cloud deployments, use the provided database connection string from your cloud provider.
+
 ### JWT Configuration
 ```
 JWT_SECRET=b7e3554499867f6ea545d34660c62b896d5d5137c06a0a0a84f6f8742c9988f3a78f04a133cca9b86e6550e789f4b1c0f8dd135037ec921b889cae53e9d66db8
@@ -43,7 +45,7 @@ EXPO_ACCESS_TOKEN=95FJk0wk-vbTrGOK5lpFBv9jZPXMNbjWXREUUcy3
 ### Application Configuration
 ```
 NODE_ENV=production
-PORT=3000
+PORT=8080
 APP_NAME=Boost API
 APP_VERSION=1.0.0
 ```
@@ -84,8 +86,12 @@ Once deployed, you can check if the application is running:
 ## Common Issues
 
 1. **DATABASE_URL not found**: Ensure the DATABASE_URL environment variable is set correctly
-2. **Prisma Client errors**: Run `yarn prisma generate` if needed
-3. **Build failures**: Check that all dependencies are installed with `yarn install`
+2. **Database connection failure**: Make sure DATABASE_URL points to accessible database host (not localhost)
+3. **Port binding issues**: Application listens on PORT environment variable (default: 8080)
+4. **Health check failure**: Ensure health endpoint `/health` is accessible on the configured port
+5. **Yarn version conflicts**: Remove `packageManager` field from package.json if conflicts occur
+6. **Prisma Client errors**: Run `yarn prisma generate` if needed
+7. **Build failures**: Check that all dependencies are installed with `yarn install`
 
 ## Production Checklist
 
