@@ -73,7 +73,6 @@ test/
 
 # Yarn files - keep necessary files for deployment
 .yarn/*
-!.yarn/cache
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
