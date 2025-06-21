@@ -14,6 +14,7 @@ import { SMMController } from './controllers/smm.controller';
 import { OrdersController } from './controllers/orders.controller';
 import { PaymentController } from './controllers/payment.controller';
 import { AdminController } from './controllers/admin.controller';
+import { PegasusController } from './controllers/pegasus.controller';
 import { LoggerMiddleware } from './middleware/logger.middleware';
 
 @Module({
@@ -26,7 +27,7 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     AuthModule,
     NotificationsModule,
   ],
-  controllers: [SMMController, OrdersController, PaymentController, AdminController],
+  controllers: [PegasusController, SMMController, OrdersController, PaymentController, AdminController],
   providers: [SMMService, PlatformService, OrdersService, PaymentService, BudPayService, NotificationService],
 })
 export class AppModule implements NestModule {
