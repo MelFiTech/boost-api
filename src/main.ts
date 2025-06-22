@@ -40,10 +40,8 @@ async function bootstrap() {
     },
   });
 
-  // Global prefix (exclude root route for Pegasus dashboard)
-  app.setGlobalPrefix('api/v1', {
-    exclude: ['/']
-  });
+  // Global prefix for API versioning
+  app.setGlobalPrefix('api/v1');
 
   const port = process.env.PORT || 8080;
   await app.listen(port, '0.0.0.0');
