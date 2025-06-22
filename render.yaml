@@ -1,0 +1,65 @@
+services:
+  - type: web
+    name: boost-api
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: yarn build:render
+    startCommand: yarn start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: boost-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: SMMSTONE_API_URL
+        value: https://smmstone.com/api/v2
+      - key: SMMSTONE_API_KEY
+        sync: false
+      - key: BUDPAY_PUBLIC_KEY
+        sync: false
+      - key: BUDPAY_SECRET_KEY
+        sync: false
+      - key: BUDPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FROM_EMAIL
+        value: noreply@melfitech.com
+      - key: FROM_NAME
+        value: Boostlab
+      - key: EXPO_ACCESS_TOKEN
+        sync: false
+      - key: APP_NAME
+        value: Boost API
+      - key: APP_VERSION
+        value: 1.0.0
+      - key: ADMIN_EMAIL
+        value: admin@melfitech.com
+      - key: DEFAULT_CURRENCY
+        value: NGN
+      - key: DEFAULT_EXCHANGE_RATE
+        value: 1600
+      - key: BCRYPT_SALT_ROUNDS
+        value: 12
+      - key: OTP_EXPIRY_MINUTES
+        value: 5
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: LOG_LEVEL
+        value: info
+
+databases:
+  - name: boost-db
+    databaseName: boost_production
+    user: boost_user
+    plan: starter
+    region: oregon 

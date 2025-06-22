@@ -20,6 +20,7 @@
     "prebuild": "rimraf dist && yarn prisma generate",
     "prestart:prod": "yarn build",
     "deploy": "yarn install && yarn build && yarn start:prod",
+    "build:render": "yarn install && yarn build && yarn db:migrate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:prod": "prisma migrate deploy",
