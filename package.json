@@ -17,7 +17,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "postbuild": "prisma generate",
-    "prebuild": "rimraf dist && yarn prisma generate",
+    "prebuild": "rimraf dist && npx prisma generate",
     "prestart:prod": "yarn build",
     "deploy": "yarn install && yarn build && yarn start:prod",
     "build:render": "yarn install && yarn build && yarn db:migrate",

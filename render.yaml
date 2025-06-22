@@ -4,8 +4,12 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: yarn build:render
-    startCommand: yarn start:prod
+    buildCommand: |
+      rm -f yarn.lock
+      yarn install
+      yarn prisma generate
+      yarn build
+    startCommand: yarn prisma migrate deploy && yarn start:prod
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
