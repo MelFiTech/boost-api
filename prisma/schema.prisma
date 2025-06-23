@@ -14,15 +14,17 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  username      String?   @unique
-  isGuest       Boolean   @default(false)
-  otp           String?   // Current OTP
-  otpExpiry     DateTime? // OTP expiration timestamp
-  isVerified    Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                String    @id @default(cuid())
+  email             String    @unique
+  username          String?   @unique
+  isGuest           Boolean   @default(false)
+  otp               String?   // Current OTP
+  otpExpiry         DateTime? // OTP expiration timestamp
+  isVerified        Boolean   @default(false)
+  pushNotifications Boolean   @default(true)  // Push notification preference
+  emailNotifications Boolean  @default(true)  // Email notification preference
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
   
   orders        Order[]
   deviceTokens  DeviceToken[]

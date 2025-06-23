@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthController } from './auth.controller';
 import { ResendService } from '../services/resend.service';
+import { GeminiService } from '../services/gemini.service';
 
 @Module({
   imports: [
@@ -19,8 +20,8 @@ import { ResendService } from '../services/resend.service';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy, ResendService],
+  providers: [AuthService, JwtStrategy, ResendService, GeminiService],
   controllers: [AuthController],
-  exports: [AuthService, ResendService],
+  exports: [AuthService, ResendService, GeminiService],
 })
 export class AuthModule {} 

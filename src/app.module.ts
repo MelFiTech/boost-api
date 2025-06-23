@@ -12,10 +12,12 @@ import { OrdersService } from './services/orders.service';
 import { PaymentService } from './services/payment.service';
 import { BudPayService } from './services/budpay.service';
 import { NotificationService } from './services/notification.service';
+import { UserService } from './services/user.service';
 import { SMMController } from './controllers/smm.controller';
 import { OrdersController } from './controllers/orders.controller';
 import { PaymentController } from './controllers/payment.controller';
 import { AdminController } from './controllers/admin.controller';
+import { UserController, UserOrdersController } from './controllers/user.controller';
 import { LoggerMiddleware } from './middleware/logger.middleware';
 
 @Module({
@@ -28,8 +30,8 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     AuthModule,
     NotificationsModule,
   ],
-  controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController],
-  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, BudPayService, NotificationService],
+  controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController, UserController, UserOrdersController],
+  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, BudPayService, NotificationService, UserService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

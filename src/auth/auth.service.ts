@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendService } from '../services/resend.service';
+import { GeminiService } from '../services/gemini.service';
 
 @Injectable()
 export class AuthService {
@@ -11,11 +12,43 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly resendService: ResendService,
+    private readonly geminiService: GeminiService,
   ) {}
 
   private generateOTP(): string {
     // Generate a 6-digit OTP
     return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  private async generateUniqueUsername(email: string): Promise<string> {
+    let username = await this.geminiService.generateUsername(email);
+    let attempts = 0;
+    const maxAttempts = 5;
+
+    // Check if username is unique, if not, modify it
+    while (attempts < maxAttempts) {
+      const existingUser = await this.prisma.user.findUnique({
+        where: { username },
+      });
+
+      if (!existingUser) {
+        return username;
+      }
+
+      // Add random suffix to make it unique
+      const randomSuffix = Math.random().toString(36).substring(2, 4);
+      username = username.length > 17 
+        ? username.substring(0, 17) + randomSuffix 
+        : username + randomSuffix;
+      
+      attempts++;
+    }
+
+    // If still not unique after max attempts, use timestamp
+    const timestamp = Date.now().toString().slice(-4);
+    username = username.substring(0, 16) + timestamp;
+    
+    return username;
   }
 
   async requestOTP(email: string) {
@@ -37,6 +70,17 @@ export class AuthService {
 
       const isNewUser = !existingUser;
 
+      // Generate username for new users
+      let username: string | undefined;
+      if (isNewUser) {
+        try {
+          username = await this.generateUniqueUsername(email);
+          this.logger.log(`Generated username: ${username} for new user: ${email}`);
+        } catch (error) {
+          this.logger.warn(`Failed to generate username for ${email}, will create without username:`, error);
+        }
+      }
+
       // Create or update user with new OTP
       const user = await this.prisma.user.upsert({
         where: { email },
@@ -46,6 +90,7 @@ export class AuthService {
         },
         create: {
           email,
+          username,
           otp,
           otpExpiry,
         },

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, Header } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { OrdersService } from '../services/orders.service';
@@ -9,6 +9,9 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get('pricing')
+  @Header('Cache-Control', 'no-cache, no-store, must-revalidate')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
   @ApiOperation({ summary: 'Calculate pricing for a service' })
   @ApiQuery({ name: 'platform', description: 'Platform name (e.g., instagram)', example: 'instagram' })
   @ApiQuery({ name: 'service', description: 'Service type (e.g., followers)', example: 'followers' })
