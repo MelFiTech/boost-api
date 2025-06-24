@@ -224,10 +224,19 @@ export class NotificationService {
             isActive: true,
           },
           select: { token: true },
+          distinct: ['token'], // Ensure we don't get duplicate tokens from database
         });
         deviceTokens = tokens.map(t => t.token);
       } else {
         throw new BadRequestException('Either userIds or deviceTokens must be provided');
+      }
+
+      // Remove duplicate tokens to prevent sending multiple notifications to the same device
+      const originalTokenCount = deviceTokens.length;
+      deviceTokens = [...new Set(deviceTokens)];
+      
+      if (originalTokenCount > deviceTokens.length) {
+        this.logger.debug(`Removed ${originalTokenCount - deviceTokens.length} duplicate device tokens`);
       }
 
       if (deviceTokens.length === 0) {
