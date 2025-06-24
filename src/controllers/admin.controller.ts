@@ -2266,4 +2266,40 @@ export class AdminController {
       throw new BadRequestException(`Failed to sync order status: ${error.message}`);
     }
   }
+
+  @Get('debug/device-tokens/:userId')
+  @ApiOperation({ summary: 'Debug: Get user device tokens (temporary)' })
+  async getDebugDeviceTokens(@Param('userId') userId: string) {
+    try {
+      const tokens = await this.prisma.deviceToken.findMany({
+        where: { userId: userId },
+        select: {
+          id: true,
+          token: true,
+          platform: true,
+          deviceInfo: true,
+          isActive: true,
+          lastUsed: true,
+          createdAt: true
+        },
+        orderBy: { lastUsed: 'desc' }
+      });
+
+      return {
+        success: true,
+        userId: userId,
+        tokens: tokens.map(token => ({
+          ...token,
+          tokenType: token.token.startsWith('ExponentPushToken[') ? 'EXPO' : 'NATIVE',
+          tokenPreview: `${token.token.substring(0, 25)}...`,
+          fullToken: token.token
+        }))
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message
+      };
+    }
+  }
 } 
