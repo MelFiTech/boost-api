@@ -45,17 +45,18 @@ export class InitiatePaymentDto {
 }
 
 export class VerifyPaymentDto {
-  @ApiProperty({ example: 'ps_abc123xyz', description: 'Payment reference from provider' })
+  @ApiProperty({ example: 'boost_orderid_timestamp', description: 'Payment reference from provider' })
   @IsString()
   reference: string;
 
-  @ApiProperty({ 
+  @ApiPropertyOptional({ 
     enum: PaymentProvider, 
     example: PaymentProvider.BUDPAY,
-    description: 'Payment provider used'
+    description: 'Payment provider used (optional - will be inferred from reference if not provided)'
   })
+  @IsOptional()
   @IsEnum(PaymentProvider)
-  provider: PaymentProvider;
+  provider?: PaymentProvider;
 }
 
 export class CryptoPaymentDto {

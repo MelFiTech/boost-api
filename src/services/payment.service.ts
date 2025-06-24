@@ -182,91 +182,135 @@ export class PaymentService {
         throw new NotFoundException('Payment record not found');
       }
 
-      // Check transaction history first (from webhooks)
-      const existingTransaction = await this.prisma.transaction.findFirst({
-        where: {
-          paymentId: payment.id,
-          status: 'COMPLETED'
-        }
-      });
+      // Determine payment provider - use provided value or infer from payment method
+      const paymentProvider = verifyPaymentDto.provider || 
+        (payment.method === PaymentMethod.CRYPTO ? PaymentProvider.CRYPTO : PaymentProvider.BUDPAY);
+
+      this.logger.debug(`Using payment provider: ${paymentProvider} for verification`);
 
       let verificationResult;
-      
-      if (existingTransaction) {
-        // We already have a completed transaction from webhook
-        verificationResult = {
-          status: 'success',
-          reference: existingTransaction.budpayReference,
-          amount: existingTransaction.amount.toNumber(),
-          currency: existingTransaction.currency,
-          paid_at: existingTransaction.paidAt?.toISOString() || new Date().toISOString(),
-          orderId: payment.orderId
-        };
 
-        this.logger.log(`Payment already verified via webhook: ${existingTransaction.budpayReference}`);
-      } else if (verifyPaymentDto.provider === PaymentProvider.BUDPAY) {
-        // Check BudPay API for new transactions
-        const budpayTransactions = await this.budPayService.checkVirtualAccountTransactions(payment.gatewayRef);
+      if (paymentProvider === PaymentProvider.BUDPAY) {
+        // PRIMARY: Check webhook logs for successful payment
+        // Extract account number from gateway reference (remove boost_ prefix)
+        const accountNumber = payment.gatewayRef.replace('boost_', '');
         
-        if (budpayTransactions.length > 0) {
-          // Look for successful transactions that match our payment amount
+        const successfulWebhookLog = await this.prisma.webhookLog.findFirst({
+          where: {
+            provider: 'budpay',
+            processed: true,
+            processingError: null,
+            OR: [
+              { event: 'successful' },
+              { event: 'payment.successful' }
+            ]
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        let matchingWebhook = null;
+        if (successfulWebhookLog) {
+          const webhookPayload = successfulWebhookLog.payload as any;
+          const webhookData = webhookPayload.data;
+          
+          // Check if account number and amount match
           const expectedAmount = payment.amount.toNumber();
-          const matchingTransaction = budpayTransactions.find(tx => 
-            tx.status === 'success' && 
-            Math.abs(parseFloat(tx.amount.toString()) - expectedAmount) < 1 // Allow 1 naira tolerance
-          );
+          const webhookAmount = parseFloat(webhookData?.amount?.toString() || '0');
+          const webhookAccountNumber = webhookData?.account_number;
+          
+          if (webhookAccountNumber === accountNumber && Math.abs(webhookAmount - expectedAmount) < 1) {
+            matchingWebhook = { webhookLog: successfulWebhookLog, webhookData };
+          }
+        }
 
-          if (matchingTransaction) {
-            // TODO: Create transaction record for this payment - temporarily disabled
-            // await this.prisma.transaction.create({
-            //   data: {
-            //     paymentId: payment.id,
-            //     budpayReference: matchingTransaction.reference,
-            //     ourReference: payment.gatewayRef,
-            //     amount: matchingTransaction.amount,
-            //     currency: matchingTransaction.currency || payment.currency,
-            //     status: 'COMPLETED',
-            //     budpayStatus: 'success',
-            //     paidAt: new Date(matchingTransaction.paidAt || new Date()),
-            //     webhookReceived: false // This came from API check, not webhook
-            //   }
-            // });
+        if (matchingWebhook) {
+          const { webhookLog, webhookData } = matchingWebhook;
+          
+          this.logger.log(`Payment verified via webhook log: ${webhookLog.id} - Account: ${webhookData.account_number}, Amount: ${webhookData.amount}`);
+          
+          verificationResult = {
+            status: 'success',
+            reference: webhookData.reference || payment.gatewayRef,
+            amount: parseFloat(webhookData.amount?.toString() || '0'),
+            currency: webhookData.currency || payment.currency,
+            paid_at: webhookData.paid_at || webhookLog.createdAt.toISOString(),
+            orderId: payment.orderId,
+            webhookLogId: webhookLog.id,
+            accountNumber: webhookData.account_number,
+            bankName: webhookData.bank_name,
+            verificationMethod: 'webhook_log'
+          };
+        } else {
+          // FALLBACK: Check existing transaction records
+          const existingTransaction = await this.prisma.transaction.findFirst({
+            where: {
+              paymentId: payment.id,
+              status: 'COMPLETED'
+            }
+          });
 
+          if (existingTransaction) {
             verificationResult = {
               status: 'success',
-              reference: matchingTransaction.reference,
-              amount: matchingTransaction.amount,
-              currency: matchingTransaction.currency || payment.currency,
-              paid_at: matchingTransaction.paidAt || new Date().toISOString(),
-              orderId: payment.orderId
-            };
-
-            this.logger.log(`Payment verified via API check: ${matchingTransaction.reference}`);
-          } else {
-            // Found transactions but none match our amount
-            verificationResult = {
-              status: 'failed',
-              reference: verifyPaymentDto.reference,
-              amount: 0,
-              currency: payment.currency,
+              reference: existingTransaction.budpayReference,
+              amount: existingTransaction.amount.toNumber(),
+              currency: existingTransaction.currency,
+              paid_at: existingTransaction.paidAt?.toISOString() || new Date().toISOString(),
               orderId: payment.orderId,
-              error: 'Payment amount does not match any completed transactions'
+              verificationMethod: 'existing_transaction'
             };
 
-            this.logger.warn(`Payment amount mismatch for ${verifyPaymentDto.reference}. Expected: ${expectedAmount}, Found transactions:`, budpayTransactions);
-          }
-        } else {
-          // No transactions found
-          verificationResult = {
-            status: 'pending',
-            reference: verifyPaymentDto.reference,
-            amount: 0,
-            currency: payment.currency,
-            orderId: payment.orderId,
-            error: 'No transactions found for this virtual account'
-          };
+            this.logger.log(`Payment verified via existing transaction: ${existingTransaction.budpayReference}`);
+          } else {
+            // LAST RESORT: Check BudPay API directly
+            const budpayTransactions = await this.budPayService.checkVirtualAccountTransactions(payment.gatewayRef);
+            
+            if (budpayTransactions.length > 0) {
+              const expectedAmount = payment.amount.toNumber();
+              const matchingTransaction = budpayTransactions.find(tx => 
+                tx.status === 'success' && 
+                Math.abs(parseFloat(tx.amount.toString()) - expectedAmount) < 1
+              );
 
-          this.logger.warn(`No transactions found for payment reference: ${verifyPaymentDto.reference}`);
+              if (matchingTransaction) {
+                verificationResult = {
+                  status: 'success',
+                  reference: matchingTransaction.reference,
+                  amount: matchingTransaction.amount,
+                  currency: matchingTransaction.currency || payment.currency,
+                  paid_at: matchingTransaction.paidAt || new Date().toISOString(),
+                  orderId: payment.orderId,
+                  verificationMethod: 'api_check'
+                };
+
+                this.logger.log(`Payment verified via API check: ${matchingTransaction.reference}`);
+              } else {
+                verificationResult = {
+                  status: 'failed',
+                  reference: verifyPaymentDto.reference,
+                  amount: 0,
+                  currency: payment.currency,
+                  orderId: payment.orderId,
+                  error: 'Payment amount does not match any completed transactions',
+                  verificationMethod: 'api_check_failed'
+                };
+
+                this.logger.warn(`Payment amount mismatch for ${verifyPaymentDto.reference}. Expected: ${expectedAmount}, Found transactions:`, budpayTransactions);
+              }
+            } else {
+              verificationResult = {
+                status: 'pending',
+                reference: verifyPaymentDto.reference,
+                amount: 0,
+                currency: payment.currency,
+                orderId: payment.orderId,
+                error: 'No payment found in webhook logs, transactions, or API',
+                verificationMethod: 'not_found'
+              };
+
+              this.logger.warn(`No payment verification found for: ${verifyPaymentDto.reference}`);
+            }
+          }
         }
       } else {
         // Crypto verification - TODO: implement proper crypto verification
@@ -276,7 +320,8 @@ export class PaymentService {
           amount: payment.amount.toNumber(),
           currency: payment.currency,
           paid_at: new Date().toISOString(),
-          orderId: payment.orderId
+          orderId: payment.orderId,
+          verificationMethod: 'crypto_auto'
         };
       }
 

@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { SmmstoneModule } from './smmstone/smmstone.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SMMService } from './services/smm.service';
@@ -13,6 +14,7 @@ import { PaymentService } from './services/payment.service';
 import { BudPayService } from './services/budpay.service';
 import { NotificationService } from './services/notification.service';
 import { UserService } from './services/user.service';
+import { SmmstoneService } from './smmstone/smmstone.service';
 import { SMMController } from './controllers/smm.controller';
 import { OrdersController } from './controllers/orders.controller';
 import { PaymentController } from './controllers/payment.controller';
@@ -29,9 +31,10 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     PrismaModule,
     AuthModule,
     NotificationsModule,
+    SmmstoneModule,
   ],
   controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController, UserController, UserOrdersController],
-  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, BudPayService, NotificationService, UserService],
+  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, BudPayService, NotificationService, UserService, SmmstoneService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

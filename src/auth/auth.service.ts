@@ -200,6 +200,43 @@ export class AuthService {
     };
   }
 
+  async adminLogin(email: string, password: string) {
+    try {
+      this.logger.debug(`Admin login attempt for email: ${email}`);
+
+      // Hardcoded admin credentials
+      const ADMIN_EMAIL = 'admin@boost.com';
+      const ADMIN_PASSWORD = 'Boost2025';
+
+      if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
+        throw new UnauthorizedException('Invalid admin credentials');
+      }
+
+      // Generate admin token with admin role
+      const payload = { 
+        email: ADMIN_EMAIL, 
+        sub: 'admin', 
+        role: 'admin',
+        isAdmin: true 
+      };
+
+      this.logger.log(`Admin login successful for: ${email}`);
+
+      return {
+        access_token: this.jwtService.sign(payload),
+        admin: {
+          id: 'admin',
+          email: ADMIN_EMAIL,
+          role: 'admin',
+          loginAt: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Admin login failed for ${email}:`, error);
+      throw error;
+    }
+  }
+
   /**
    * Resend OTP if the previous one expired or wasn't received
    */

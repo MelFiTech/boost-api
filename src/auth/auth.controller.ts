@@ -4,6 +4,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { AdminLoginDto } from '../dto/admin-login.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -79,5 +80,31 @@ export class AuthController {
       success: true,
       message: 'Logged out successfully',
     };
+  }
+
+  @Post('admin')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Admin login with email and password' })
+  @ApiResponse({
+    status: 200,
+    description: 'Admin login successful',
+    schema: {
+      properties: {
+        access_token: { type: 'string' },
+        admin: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            email: { type: 'string' },
+            role: { type: 'string' },
+            loginAt: { type: 'string' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Invalid admin credentials' })
+  async adminLogin(@Body() dto: AdminLoginDto) {
+    return this.authService.adminLogin(dto.email, dto.password);
   }
 } 
