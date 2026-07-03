@@ -1,8 +1,19 @@
-import { Controller, Post, Body, Get, Param, Headers, Req, HttpCode } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Headers, Req, HttpCode, Request as ReqDecorator, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags, ApiParam } from '@nestjs/swagger';
+import { IsString, Length } from 'class-validator';
 import { PaymentService } from '../services/payment.service';
 import { InitiatePaymentDto, VerifyPaymentDto } from '../dto/payment.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Request } from 'express';
+
+class PayWithWalletDto {
+  @IsString()
+  orderId: string;
+
+  @IsString()
+  @Length(4, 6)
+  pin: string;
+}
 
 @ApiTags('payments')
 @Controller('payments')
@@ -14,6 +25,14 @@ export class PaymentController {
   @ApiResponse({ status: 201, description: 'Payment initiated — bank transfer details provided' })
   async initiatePayment(@Body() initiatePaymentDto: InitiatePaymentDto) {
     return this.paymentService.initiatePayment(initiatePaymentDto);
+  }
+
+  @Post('pay-with-wallet')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Pay an order by debiting the user wallet (requires transaction PIN)' })
+  @ApiResponse({ status: 201, description: 'Order paid from wallet' })
+  async payWithWallet(@Body() dto: PayWithWalletDto, @ReqDecorator() req) {
+    return this.paymentService.payWithWallet(dto.orderId, req.user.userId, dto.pin);
   }
 
   @Post('verify')

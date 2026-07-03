@@ -160,7 +160,7 @@ export class NyraApiService {
       `Creating Nyra dynamic VA: ref=${request.external_reference}, amount=${request.amount}, provider=${request.provider}`,
     );
 
-    const response = await this.authedRequest<NyraApiResponse<NyraFundingAccount>>(
+    const response = await this.clientCredentialsRequest<NyraApiResponse<NyraFundingAccount>>(
       'post',
       '/business/wallets/funding-accounts',
       request,
@@ -174,7 +174,7 @@ export class NyraApiService {
   }
 
   async getFundingAccount(id: string): Promise<NyraFundingAccount> {
-    const response = await this.authedRequest<NyraApiResponse<NyraFundingAccount>>(
+    const response = await this.clientCredentialsRequest<NyraApiResponse<NyraFundingAccount>>(
       'get',
       `/business/wallets/funding-accounts/${id}`,
     );
@@ -182,7 +182,7 @@ export class NyraApiService {
   }
 
   async getFundingAccountStatus(sessionId: string): Promise<NyraFundingAccount> {
-    const response = await this.authedRequest<NyraApiResponse<NyraFundingAccount>>(
+    const response = await this.clientCredentialsRequest<NyraApiResponse<NyraFundingAccount>>(
       'get',
       `/business/wallets/funding-accounts/${sessionId}/status`,
     );
@@ -224,7 +224,16 @@ export class NyraApiService {
     if (!response.success && response.status !== 'success') {
       throw new Error(response.message || 'Failed to list transfer banks');
     }
-    return response.data || [];
+    return (response.data || [])
+      .map((bank) => {
+        const raw = bank as NyraTransferBank & { bank_name?: string; bank_code?: string };
+        return {
+          name: String(raw.bank_name ?? raw.name ?? '').trim(),
+          code: String(raw.bank_code ?? raw.code ?? '').trim(),
+          slug: raw.slug,
+        };
+      })
+      .filter((bank) => bank.name && bank.code);
   }
 
   async transferNameEnquiry(

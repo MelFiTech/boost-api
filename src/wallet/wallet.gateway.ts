@@ -15,6 +15,19 @@ export interface WalletSocketPayload {
   active: boolean;
 }
 
+export interface WalletTransactionSocketPayload {
+  id: string;
+  type: string;
+  category: string;
+  amount: string;
+  balanceAfter: string;
+  reference: string;
+  status: string;
+  title: string;
+  narration?: string | null;
+  createdAt: string;
+}
+
 /**
  * Pushes wallet balance changes to the owning user in real time.
  * Apps connect to the /wallet namespace with their JWT and listen for
@@ -96,5 +109,10 @@ export class WalletGateway implements OnGatewayConnection, OnGatewayDisconnect {
   pushUpdate(userId: string, wallet: WalletSocketPayload) {
     this.server.to(this.userRoom(userId)).emit('wallet:update', wallet);
     this.logger.log(`Pushed wallet update to ${userId}: balance=${wallet.balance}`);
+  }
+
+  pushTransaction(userId: string, transaction: WalletTransactionSocketPayload) {
+    this.server.to(this.userRoom(userId)).emit('wallet:transaction', transaction);
+    this.logger.log(`Pushed wallet transaction to ${userId}: ${transaction.title} (${transaction.id})`);
   }
 }

@@ -62,12 +62,49 @@ export class NyraVasApiService {
     return (payload.data ?? payload) as T;
   }
 
-  listServices() {
-    return this.request<NyraVasService[]>('get', '/business/vas/services');
+  // Nyra returns service/biller names under `service` / `biller`, and package
+  // lists nested under an arbitrary wrapper key (e.g. { payment_type_id: { items } }
+  // for electricity, { pkg_id: { items } } for TV). We normalize everything here
+  // so the rest of the app sees a stable { id, name } / flat item[] shape.
+  private extractItems(data: unknown): NyraVasPackageItem[] {
+    if (Array.isArray(data)) {
+      return data as NyraVasPackageItem[];
+    }
+    if (data && typeof data === 'object') {
+      const record = data as Record<string, unknown>;
+      if (Array.isArray(record.items)) {
+        return record.items as NyraVasPackageItem[];
+      }
+      for (const value of Object.values(record)) {
+        if (value && typeof value === 'object' && Array.isArray((value as any).items)) {
+          return (value as any).items as NyraVasPackageItem[];
+        }
+      }
+    }
+    return [];
   }
 
-  listBillers(serviceId: string) {
-    return this.request<NyraVasBiller[]>('get', `/business/vas/${serviceId}/billers`);
+  async listServices(): Promise<NyraVasService[]> {
+    const raw = await this.request<Record<string, any>[]>('get', '/business/vas/services');
+    return (raw ?? []).map((service) => ({
+      ...service,
+      id: service.id,
+      name: (service.service ?? service.name ?? '').toString().trim(),
+      category: service.category,
+    }));
+  }
+
+  async listBillers(serviceId: string): Promise<NyraVasBiller[]> {
+    const raw = await this.request<Record<string, any>[]>(
+      'get',
+      `/business/vas/${serviceId}/billers`,
+    );
+    return (raw ?? []).map((biller) => ({
+      ...biller,
+      id: biller.id,
+      name: (biller.biller ?? biller.name ?? '').toString().trim(),
+      category: biller.category,
+    }));
   }
 
   listDataPlans(network: string) {
@@ -85,18 +122,20 @@ export class NyraVasApiService {
     return response.data.data ?? [];
   }
 
-  listTvItems(billerId: string) {
-    return this.request<NyraVasPackageItem[]>(
+  async listTvItems(billerId: string): Promise<NyraVasPackageItem[]> {
+    const data = await this.request<unknown>(
       'get',
       `/business/vas/tv/items?biller_id=${encodeURIComponent(billerId)}`,
     );
+    return this.extractItems(data);
   }
 
-  listElectricityItems(billerId: string) {
-    return this.request<NyraVasPackageItem[]>(
+  async listElectricityItems(billerId: string): Promise<NyraVasPackageItem[]> {
+    const data = await this.request<unknown>(
       'get',
       `/business/vas/electricity/items?biller_id=${encodeURIComponent(billerId)}`,
     );
+    return this.extractItems(data);
   }
 
   validateTv(smartCardNumber: string, packageId: string) {

@@ -5,6 +5,7 @@ import {
   WalletTransactionType,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { OrderFulfillmentService } from '../../smmstone/order-fulfillment.service';
 import { NotificationService } from '../../services/notification.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { NyraApiService } from './nyra-api.service';
@@ -26,6 +27,7 @@ export class NyraWebhookService {
     private readonly nyraApi: NyraApiService,
     private readonly walletService: WalletService,
     private readonly notificationService: NotificationService,
+    private readonly orderFulfillment: OrderFulfillmentService,
   ) {}
 
   async handleWebhook(
@@ -311,6 +313,14 @@ export class NyraWebhookService {
     });
 
     this.logger.log(`Order payment completed via Nyra: ${payment.id} order=${payment.orderId}`);
+
+    // Hand off to SMMStone immediately; failure keeps the order on the
+    // admin attention list without affecting the recorded payment
+    try {
+      await this.orderFulfillment.fulfillOrder(payment.orderId);
+    } catch (err) {
+      this.logger.error(`Auto-fulfillment after Nyra payment failed: ${err.message}`);
+    }
 
     if (payment.order.userId) {
       try {

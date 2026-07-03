@@ -64,6 +64,7 @@ export function getAdminDashboardHtml(apiBase: string): string {
         <button class="nav-item" data-page="features"><span class="nav-icon"><i class="ph ph-flag"></i></span><span class="nav-label">Feature Flags</span></button>
         <button class="nav-item" data-page="pricing"><span class="nav-icon"><i class="ph ph-currency-circle-dollar"></i></span><span class="nav-label">Pricing &amp; Rates</span></button>
         <button class="nav-item" data-page="settings"><span class="nav-icon"><i class="ph ph-device-mobile"></i></span><span class="nav-label">App Settings</span></button>
+        <button class="nav-item" data-page="push"><span class="nav-icon"><i class="ph ph-bell-ringing"></i></span><span class="nav-label">Push Notifications</span></button>
 
         <div class="nav-section">Monitoring</div>
         <button class="nav-item" data-page="webhooks"><span class="nav-icon"><i class="ph ph-broadcast"></i></span><span class="nav-label">Webhooks</span></button>
@@ -102,6 +103,7 @@ export function getAdminDashboardHtml(apiBase: string): string {
             </div>
             <span id="periodLabel" class="period-label muted"></span>
           </div>
+          <div id="attentionBanner" class="attention-banner hidden"></div>
           <div id="dashboardMetrics" class="grid-metrics grid-metrics-wide"></div>
           <div class="grid-2" style="margin-bottom:20px">
             <div class="panel">
@@ -136,11 +138,12 @@ export function getAdminDashboardHtml(apiBase: string): string {
             <div class="panel-header">
               <div>
                 <h3>Order management</h3>
-                <p class="muted" style="margin-top:4px;font-size:.82rem">Approve, decline, and track fulfillment across the platform.</p>
+                <p class="muted" style="margin-top:4px;font-size:.82rem">Track fulfillment, recover stuck payments, refire provider jobs, and refund users.</p>
               </div>
               <button class="btn btn-ghost btn-sm" id="cleanupOrdersBtn">Cleanup expired</button>
             </div>
             <div class="tabs" id="orderTabs">
+              <button class="tab" data-order-tab="attention">Needs attention <span class="tab-badge hidden" id="attentionTabBadge">0</span></button>
               <button class="tab active" data-order-tab="all">All</button>
               <button class="tab" data-order-tab="pending">Pending</button>
               <button class="tab" data-order-tab="ongoing">Ongoing</button>
@@ -288,6 +291,29 @@ export function getAdminDashboardHtml(apiBase: string): string {
               </div>
             </div>
             <div class="panel-body padded" id="settingsBody"></div>
+          </div>
+        </section>
+
+        <section data-page-panel="push" class="hidden">
+          <div class="grid-2">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h3>Compose push</h3>
+                  <p class="muted" style="margin-top:4px;font-size:.82rem">Send Expo push notifications to targeted app users.</p>
+                </div>
+              </div>
+              <div class="panel-body padded" id="pushComposeBody"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h3>Quick templates</h3>
+                  <p class="muted" style="margin-top:4px;font-size:.82rem">One-click templates — tap to fill the form.</p>
+                </div>
+              </div>
+              <div class="panel-body padded" id="pushTemplatesBody"></div>
+            </div>
           </div>
         </section>
 

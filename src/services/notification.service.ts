@@ -8,11 +8,71 @@ import {
   UpdateDeviceTokenDto,
   MarkNotificationDto
 } from '../dto/notification.dto';
-import { DevicePlatform, NotificationType, NotificationStatus } from '@prisma/client';
+import { AdminSendPushDto, PushAudience } from '../dto/admin-push.dto';
+import { DevicePlatform, NotificationType, NotificationStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
+
+  private static readonly ADMIN_PUSH_TEMPLATES = [
+    {
+      key: 'promo_boost',
+      label: 'Boost promo',
+      title: 'Boost your socials 🚀',
+      body: 'Get real followers, likes & views. Tap to start boosting today!',
+      type: NotificationType.PROMOTIONAL,
+    },
+    {
+      key: 'fund_wallet',
+      label: 'Fund wallet',
+      title: 'Top up your wallet 💰',
+      body: 'Fund your BoostLab wallet instantly and pay for boosts & bills.',
+      type: NotificationType.PROMOTIONAL,
+    },
+    {
+      key: 'pay_bills',
+      label: 'Pay bills',
+      title: 'Bills made easy ⚡',
+      body: 'Pay airtime, data, TV and electricity straight from your wallet.',
+      type: NotificationType.PROMOTIONAL,
+    },
+    {
+      key: 'kyc_reminder',
+      label: 'KYC reminder',
+      title: 'Complete your verification',
+      body: 'Verify your identity to unlock withdrawals and higher limits.',
+      type: NotificationType.SECURITY,
+    },
+    {
+      key: 'security_tip',
+      label: 'Security tip',
+      title: 'Keep your account safe',
+      body: 'Never share your PIN or OTP with anyone — including BoostLab staff.',
+      type: NotificationType.SECURITY,
+    },
+    {
+      key: 'maintenance',
+      label: 'Maintenance',
+      title: 'Scheduled maintenance',
+      body: 'We will perform brief maintenance tonight. Services may be briefly unavailable.',
+      type: NotificationType.SYSTEM_ALERT,
+    },
+    {
+      key: 'new_feature',
+      label: 'New feature',
+      title: 'Something new on BoostLab',
+      body: 'Check out our latest update in the app.',
+      type: NotificationType.SYSTEM_ALERT,
+    },
+    {
+      key: 'withdrawal_ready',
+      label: 'Withdrawals live',
+      title: 'Withdraw to your bank',
+      body: 'Verified users can now withdraw wallet balance to any approved bank account.',
+      type: NotificationType.SYSTEM_ALERT,
+    },
+  ] as const;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -502,6 +562,194 @@ export class NotificationService {
       this.logger.error(`Failed to mark notification: ${error.message}`, error.stack);
       throw new NotFoundException('Notification not found');
     }
+  }
+
+  getAdminPushTemplates() {
+    return NotificationService.ADMIN_PUSH_TEMPLATES;
+  }
+
+  async previewPushAudience(audience: PushAudience, userIds?: string[]) {
+    const resolved = await this.resolvePushAudience(audience, userIds);
+    return {
+      audience,
+      userCount: resolved.userIds.length,
+      deviceCount: resolved.deviceTokens.length,
+      guestDeviceCount: resolved.guestTokenCount,
+    };
+  }
+
+  async sendAdminPush(
+    dto: AdminSendPushDto,
+    meta?: { sentBy?: string },
+  ) {
+    const resolved = await this.resolvePushAudience(dto.audience, dto.userIds);
+
+    if (resolved.deviceTokens.length === 0) {
+      return {
+        success: false,
+        message: 'No active device tokens found for this audience',
+        sentCount: 0,
+        failedCount: 0,
+        audience: dto.audience,
+        userCount: resolved.userIds.length,
+        deviceCount: 0,
+      };
+    }
+
+    const data: Record<string, string> = {
+      source: 'admin_broadcast',
+      audience: dto.audience,
+      ...(dto.templateKey ? { templateKey: dto.templateKey } : {}),
+      ...(dto.clickAction ? { clickAction: dto.clickAction } : {}),
+      ...(meta?.sentBy ? { sentBy: meta.sentBy } : {}),
+    };
+
+    return this.sendNotification({
+      title: dto.title,
+      body: dto.body,
+      type: dto.type,
+      userIds: resolved.userIds.length > 0 ? resolved.userIds : undefined,
+      deviceTokens: resolved.deviceTokens,
+      data,
+    });
+  }
+
+  private async resolvePushAudience(audience: PushAudience, userIds?: string[]) {
+    const activeSince = new Date();
+    activeSince.setDate(activeSince.getDate() - 30);
+
+    let tokenWhere: Prisma.DeviceTokenWhereInput = { isActive: true };
+    let resolvedUserIds: string[] = [];
+
+    switch (audience) {
+      case PushAudience.INDIVIDUALS: {
+        if (!userIds?.length) {
+          throw new BadRequestException('userIds is required when audience is individuals');
+        }
+        resolvedUserIds = [...new Set(userIds)];
+        tokenWhere = { ...tokenWhere, userId: { in: resolvedUserIds } };
+        break;
+      }
+      case PushAudience.VERIFIED_USERS: {
+        const users = await this.prisma.user.findMany({
+          where: { isVerified: true },
+          select: { id: true },
+        });
+        resolvedUserIds = users.map((u) => u.id);
+        tokenWhere = { ...tokenWhere, userId: { in: resolvedUserIds } };
+        break;
+      }
+      case PushAudience.UNVERIFIED_USERS: {
+        const users = await this.prisma.user.findMany({
+          where: { isVerified: false },
+          select: { id: true },
+        });
+        resolvedUserIds = users.map((u) => u.id);
+        tokenWhere = { ...tokenWhere, userId: { in: resolvedUserIds } };
+        break;
+      }
+      case PushAudience.IOS_ONLY:
+        tokenWhere = { ...tokenWhere, platform: DevicePlatform.IOS };
+        break;
+      case PushAudience.ANDROID_ONLY:
+        tokenWhere = { ...tokenWhere, platform: DevicePlatform.ANDROID };
+        break;
+      case PushAudience.ACTIVE_30D: {
+        const users = await this.prisma.user.findMany({
+          where: { updatedAt: { gte: activeSince } },
+          select: { id: true },
+        });
+        resolvedUserIds = users.map((u) => u.id);
+        tokenWhere = { ...tokenWhere, userId: { in: resolvedUserIds } };
+        break;
+      }
+      case PushAudience.WITH_ORDERS: {
+        const users = await this.prisma.user.findMany({
+          where: { orders: { some: {} } },
+          select: { id: true },
+        });
+        resolvedUserIds = users.map((u) => u.id);
+        tokenWhere = { ...tokenWhere, userId: { in: resolvedUserIds } };
+        break;
+      }
+      case PushAudience.GUEST_DEVICES:
+        tokenWhere = { ...tokenWhere, userId: null };
+        break;
+      case PushAudience.ALL:
+      default:
+        break;
+    }
+
+    const tokens = await this.prisma.deviceToken.findMany({
+      where: tokenWhere,
+      select: { token: true, userId: true },
+    });
+
+    const deviceTokens = [...new Set(tokens.map((t) => t.token))];
+    if (resolvedUserIds.length === 0) {
+      resolvedUserIds = [...new Set(tokens.map((t) => t.userId).filter(Boolean) as string[])];
+    }
+
+    return {
+      userIds: resolvedUserIds,
+      deviceTokens,
+      guestTokenCount: tokens.filter((t) => !t.userId).length,
+    };
+  }
+
+  /** Push for wallet ledger events (funding, bills, withdrawal, refunds, orders). */
+  async notifyWalletTransaction(
+    userId: string,
+    tx: {
+      id: string;
+      type: string;
+      category: string;
+      amount: string;
+      balanceAfter: string;
+      title: string;
+      status: string;
+      reference?: string;
+    },
+  ) {
+    if (!['COMPLETED', 'PROCESSING'].includes(tx.status)) return;
+
+    const amount = this.formatNgn(tx.amount);
+    const balance = this.formatNgn(tx.balanceAfter);
+    const isCredit = tx.type === 'CREDIT';
+    const body = isCredit
+      ? `${amount} credited. Balance: ${balance}`
+      : `${amount} debited. Balance: ${balance}`;
+
+    const type =
+      tx.category === 'SMM_ORDER'
+        ? NotificationType.ORDER_UPDATE
+        : NotificationType.PAYMENT_UPDATE;
+
+    try {
+      await this.sendNotification({
+        title: tx.title,
+        body,
+        type,
+        userIds: [userId],
+        data: {
+          type: 'wallet_transaction',
+          transactionId: tx.id,
+          category: tx.category,
+          amount: tx.amount,
+          balanceAfter: tx.balanceAfter,
+          reference: tx.reference || '',
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Wallet push failed for ${userId} (${tx.id}): ${error.message}`,
+      );
+    }
+  }
+
+  private formatNgn(value: string | number): string {
+    const num = typeof value === 'string' ? Number(value) : value;
+    return `₦${num.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
   }
 
   // Clean up old notifications

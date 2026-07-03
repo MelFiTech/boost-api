@@ -26,6 +26,22 @@ export class SMMService {
     this.usdtRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 0;
   }
 
+  // Only sync services we actually sell — keeps the shared DB lean
+  private static readonly ALLOWED_PLATFORMS = new Set([
+    'Instagram',
+    'TikTok',
+    'YouTube',
+    'Twitter',
+    'Facebook',
+    'Telegram',
+  ]);
+  private static readonly ALLOWED_CATEGORIES = new Set([
+    'Followers',
+    'Likes',
+    'Views',
+    'Comments',
+  ]);
+
   private calculateBoostRate(providerRate: number): number {
     return providerRate * (1 + this.markupPercentage / 100);
   }
@@ -83,43 +99,70 @@ export class SMMService {
       const providerServices = await this.fetchProviderServices();
       let updated = 0;
       let added = 0;
-      
-      for (const service of providerServices) {
+
+      // Keep only platforms/categories we sell
+      const relevantServices = providerServices.filter((service) => {
+        const { platform, category } = this.platformService.classifyServiceName(service.name);
+        return (
+          SMMService.ALLOWED_PLATFORMS.has(platform) &&
+          SMMService.ALLOWED_CATEGORIES.has(category)
+        );
+      });
+      this.logger.log(
+        `Syncing ${relevantServices.length} relevant services (of ${providerServices.length} from provider)`,
+      );
+
+      // One bulk read instead of a findFirst per service
+      const existingServices = await this.prisma.service.findMany({
+        where: { providerId: provider.id },
+      });
+      const existingByServiceId = new Map<string, (typeof existingServices)[number]>(
+        existingServices.map((s) => [s.serviceId, s]),
+      );
+
+      const toCreate: any[] = [];
+      const toUpdate: Array<{ id: string; data: any }> = [];
+      const freshServiceIds = new Set<string>();
+
+      for (const service of relevantServices) {
         const providerRate = parseFloat(service.rate);
         const boostRate = this.calculateBoostRate(providerRate);
-        
-        // Categorize the service
+
+        // Categorize the service (platform/category ids are cached in-memory)
         const { platformId, categoryId } = await this.platformService.categorizeService(service.name);
 
-        const existingService = await this.prisma.service.findFirst({
-          where: { 
-            serviceId: service.service,
-            providerId: provider.id
-          }
-        });
+        // SMMStone returns numeric ids/min/max; our columns are String/Int
+        const serviceId = String(service.service);
+        const minOrder = parseInt(String(service.min), 10);
+        const maxOrder = parseInt(String(service.max), 10);
+        freshServiceIds.add(serviceId);
+
+        const existingService = existingByServiceId.get(serviceId);
 
         if (existingService) {
           // Check if there are any changes
           if (
             existingService.name !== service.name ||
             existingService.providerRate !== providerRate ||
-            existingService.minOrder !== parseInt(service.min) ||
-            existingService.maxOrder !== parseInt(service.max) ||
+            existingService.minOrder !== minOrder ||
+            existingService.maxOrder !== maxOrder ||
             existingService.platformId !== platformId ||
             existingService.categoryId !== categoryId ||
+            existingService.providerCategory !== (service.category || null) ||
             existingService.dripfeed !== service.dripfeed ||
             existingService.refill !== service.refill ||
             existingService.cancel !== service.cancel
           ) {
-            await this.prisma.service.update({
-              where: { id: existingService.id },
+            toUpdate.push({
+              id: existingService.id,
               data: {
                 name: service.name,
                 type: service.type,
+                providerCategory: service.category || null,
                 providerRate,
                 boostRate,
-                minOrder: parseInt(service.min),
-                maxOrder: parseInt(service.max),
+                minOrder,
+                maxOrder,
                 platformId,
                 categoryId,
                 dripfeed: service.dripfeed,
@@ -128,28 +171,81 @@ export class SMMService {
                 lastChecked: new Date(),
               },
             });
-            updated++;
           }
         } else {
-          await this.prisma.service.create({
-            data: {
-              serviceId: service.service,
-              name: service.name,
-              type: service.type,
-              providerRate,
-              boostRate,
-              minOrder: parseInt(service.min),
-              maxOrder: parseInt(service.max),
-              platformId,
-              categoryId,
-              providerId: provider.id,
-              dripfeed: service.dripfeed,
-              refill: service.refill,
-              cancel: service.cancel,
-            },
+          toCreate.push({
+            serviceId,
+            name: service.name,
+            type: service.type,
+            providerCategory: service.category || null,
+            providerRate,
+            boostRate,
+            minOrder,
+            maxOrder,
+            platformId,
+            categoryId,
+            providerId: provider.id,
+            dripfeed: service.dripfeed,
+            refill: service.refill,
+            cancel: service.cancel,
           });
-          added++;
         }
+      }
+
+      // Execute updates in batches instead of one-by-one; a full SMMStone
+      // backfill can touch thousands of rows.
+      for (let i = 0; i < toUpdate.length; i += 100) {
+        const chunk = toUpdate.slice(i, i + 100);
+        await this.prisma.$transaction(
+          chunk.map((item) =>
+            this.prisma.service.update({
+              where: { id: item.id },
+              data: item.data,
+            }),
+          ),
+        );
+        updated += chunk.length;
+        this.logger.log(`Sync progress: ${updated}/${toUpdate.length} services updated`);
+      }
+
+      // Bulk insert new services in chunks
+      for (let i = 0; i < toCreate.length; i += 500) {
+        const chunk = toCreate.slice(i, i + 500);
+        const result = await this.prisma.service.createMany({
+          data: chunk,
+          skipDuplicates: true,
+        });
+        added += result.count;
+        this.logger.log(`Sync progress: ${added}/${toCreate.length} new services inserted`);
+      }
+
+      // Remove stale services: anything the provider no longer offers or
+      // outside the filter. Keep (but deactivate) rows referenced by orders.
+      const staleIds = existingServices
+        .filter((s) => !freshServiceIds.has(s.serviceId))
+        .map((s) => s.id);
+      if (staleIds.length > 0) {
+        const referenced = await this.prisma.order.findMany({
+          where: { serviceId: { in: staleIds } },
+          select: { serviceId: true },
+          distinct: ['serviceId'],
+        });
+        const referencedIds = new Set(referenced.map((o) => o.serviceId));
+        const deletableIds = staleIds.filter((id) => !referencedIds.has(id));
+        const deactivateIds = staleIds.filter((id) => referencedIds.has(id));
+
+        if (deletableIds.length > 0) {
+          await this.prisma.service.deleteMany({ where: { id: { in: deletableIds } } });
+        }
+        if (deactivateIds.length > 0) {
+          await this.prisma.service.updateMany({
+            where: { id: { in: deactivateIds } },
+            data: { active: false },
+          });
+        }
+        this.logger.log(
+          `Pruned ${deletableIds.length} stale services, deactivated ${deactivateIds.length} with order history`,
+        );
       }
 
       return {

@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { BankAccountsModule } from '../bank-accounts/bank-accounts.module';
 import { AppSettingsModule } from '../app-settings/app-settings.module';
 import { KycModule } from '../kyc/kyc.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PinModule } from '../pin/pin.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ProvidersModule } from '../providers/providers.module';
@@ -15,6 +16,7 @@ import { WalletService } from './wallet.service';
   imports: [
     PrismaModule,
     AppSettingsModule,
+    NotificationsModule,
     forwardRef(() => ProvidersModule),
     KycModule,
     forwardRef(() => BankAccountsModule),

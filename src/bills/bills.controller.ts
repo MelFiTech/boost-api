@@ -18,6 +18,10 @@ class PayBillDto {
 
   @IsOptional()
   @IsString()
+  billerName?: string;
+
+  @IsOptional()
+  @IsString()
   network?: string;
 
   @IsOptional()

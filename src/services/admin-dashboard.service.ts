@@ -1,9 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { OrderStatus, TransactionStatus } from '@prisma/client';
+import { OrderStatus, PaymentStatus, TransactionStatus } from '@prisma/client';
 import { NyraApiService } from '../providers/nyra/nyra-api.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmmstoneService } from '../smmstone/smmstone.service';
+import {
+  LOW_PROVIDER_BALANCE_ISSUE,
+  parseSmmstoneBalance,
+} from '../smmstone/smmstone-balance.util';
 
 export type DashboardPeriod = 'today' | 'week' | 'month' | 'all' | 'custom';
 
@@ -191,7 +195,7 @@ export class AdminDashboardService {
       where: {
         status: OrderStatus.COMPLETED,
         createdAt: dateFilter,
-        payment: { status: 'COMPLETED' },
+        payment: { status: PaymentStatus.COMPLETED },
       },
       _sum: { price: true },
     });
@@ -275,16 +279,44 @@ export class AdminDashboardService {
   }
 
   private async fetchProviderBalances() {
+    const lowBalanceThreshold = parseFloat(
+      process.env.SMMSTONE_LOW_BALANCE_THRESHOLD || '10',
+    );
+
+    const pendingDueToLowBalance = await this.prisma.order.count({
+      where: {
+        status: 'PENDING',
+        providerOrderId: null,
+        fulfillmentError: { contains: LOW_PROVIDER_BALANCE_ISSUE },
+        payment: { status: PaymentStatus.COMPLETED },
+      },
+    });
+
     const smmstone = await this.smmstoneService
       .getBalance()
-      .then((data) => ({
-        balance: parseFloat(String(data?.balance ?? data ?? 0)) || null,
-        currency: data?.currency || 'USD',
-        error: null as string | null,
-      }))
+      .then((data) => {
+        const balance = parseSmmstoneBalance(data);
+        const lowBalance =
+          balance != null ? balance < lowBalanceThreshold : false;
+        return {
+          balance,
+          currency: data?.currency || 'USD',
+          lowBalance,
+          lowBalanceThreshold,
+          pendingDueToLowBalance,
+          error: null as string | null,
+        };
+      })
       .catch((err) => {
         this.logger.warn(`SMMStone balance fetch failed: ${err.message}`);
-        return { balance: null, currency: 'USD', error: err.message };
+        return {
+          balance: null,
+          currency: 'USD',
+          lowBalance: false,
+          lowBalanceThreshold,
+          pendingDueToLowBalance,
+          error: err.message,
+        };
       });
 
     const nyraMaster = await this.nyraApi

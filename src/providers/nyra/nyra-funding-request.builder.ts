@@ -18,13 +18,16 @@ export function splitCustomerName(name?: string): { firstname: string; lastname:
   return { firstname: parts[0], lastname: parts.slice(1).join(' ') };
 }
 
+/** Virtual accounts are always created in the business name, never the end user's. */
+export const NYRA_BUSINESS_ACCOUNT_NAME = 'Boostlab';
+
 export function buildNyraFundingRequest(
   rail: NyraFundingRail,
   params: CreateFundingAccountParams,
   expiresIn: number,
 ): NyraCreateFundingAccountRequest {
-  const { firstname, lastname } = splitCustomerName(params.customerName);
-  const customerName = params.customerName?.trim() || `${firstname} ${lastname}`;
+  const businessName = NYRA_BUSINESS_ACCOUNT_NAME;
+  const { firstname, lastname } = splitCustomerName(businessName);
   const email = params.customerEmail;
 
   const base: NyraCreateFundingAccountRequest = {
@@ -39,9 +42,9 @@ export function buildNyraFundingRequest(
     return {
       ...base,
       meta: {
-        customer_name: customerName,
+        customer_name: businessName,
         customer_email: email,
-        ...(params.nameOnAccount ? { name_on_account: params.nameOnAccount } : {}),
+        name_on_account: businessName,
         flutterwave: {
           email,
           firstname,
@@ -57,8 +60,8 @@ export function buildNyraFundingRequest(
     ...base,
     meta: {
       customer_email: email,
-      customer_name: customerName,
-      ...(params.nameOnAccount ? { name_on_account: params.nameOnAccount } : {}),
+      customer_name: businessName,
+      name_on_account: businessName,
     },
   };
 }

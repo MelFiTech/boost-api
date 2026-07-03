@@ -8,6 +8,8 @@ export interface NyraVasApiResponse<T = unknown> {
 export interface NyraVasService {
   id: string;
   name: string;
+  // Nyra's raw field for the display name
+  service?: string;
   category?: string;
   [key: string]: unknown;
 }
@@ -15,6 +17,9 @@ export interface NyraVasService {
 export interface NyraVasBiller {
   id: string;
   name: string;
+  // Nyra's raw field for the display name
+  biller?: string;
+  category?: string;
   [key: string]: unknown;
 }
 

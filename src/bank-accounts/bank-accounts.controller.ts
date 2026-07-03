@@ -18,6 +18,16 @@ class AddBankAccountDto {
   accountNumber: string;
 }
 
+class ResolveBankAccountDto {
+  @IsString()
+  bankCode: string;
+
+  @IsString()
+  @Length(10, 10)
+  @Matches(/^\d{10}$/, { message: 'Account number must be exactly 10 digits' })
+  accountNumber: string;
+}
+
 @ApiTags('bank-accounts')
 @Controller('bank-accounts')
 @UseGuards(JwtAuthGuard)
@@ -36,6 +46,13 @@ export class BankAccountsController {
   async listBanks() {
     const banks = await this.bankAccountsService.listBanks();
     return { success: true, data: { banks } };
+  }
+
+  @Post('resolve')
+  @ApiOperation({ summary: 'Resolve bank account name before adding an account' })
+  async resolve(@Request() req, @Body() dto: ResolveBankAccountDto) {
+    const data = await this.bankAccountsService.resolveAccount(req.user.userId, dto);
+    return { success: true, data };
   }
 
   @Get(':id')

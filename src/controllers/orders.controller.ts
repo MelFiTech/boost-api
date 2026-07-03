@@ -1,12 +1,38 @@
-import { Controller, Post, Body, Get, Param, Query, Header } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, Header, Request, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { OrdersService } from '../services/orders.service';
+import { OptionalAuthGuard } from '../auth/guards/optional-auth.guard';
 
 @ApiTags('orders')
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  @Get('catalog')
+  @Header('Cache-Control', 'no-cache, no-store, must-revalidate')
+  @ApiOperation({ summary: 'Available platforms and services with valid quantity ranges' })
+  @ApiResponse({
+    status: 200,
+    description: 'Service catalog retrieved successfully',
+    schema: {
+      example: {
+        platforms: [
+          {
+            id: 'youtube',
+            label: 'YouTube',
+            services: [
+              { id: 'views', label: 'Views', minOrder: 100, maxOrder: 1000000 },
+              { id: 'followers', label: 'Subscribers', minOrder: 10, maxOrder: 50000 },
+            ],
+          },
+        ],
+      },
+    },
+  })
+  async getCatalog() {
+    return this.ordersService.getServiceCatalog();
+  }
 
   @Get('pricing')
   @Header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -15,6 +41,7 @@ export class OrdersController {
   @ApiOperation({ summary: 'Calculate pricing for a service' })
   @ApiQuery({ name: 'platform', description: 'Platform name (e.g., instagram)', example: 'instagram' })
   @ApiQuery({ name: 'service', description: 'Service type (e.g., followers)', example: 'followers' })
+  @ApiQuery({ name: 'serviceId', required: false, description: 'Exact SMMStone provider service id from catalog', example: '11773' })
   @ApiQuery({ name: 'quantity', description: 'Quantity needed', example: 1000 })
   @ApiQuery({ name: 'currency', description: 'Currency (NGN or USDT)', example: 'NGN' })
   @ApiResponse({
@@ -36,6 +63,7 @@ export class OrdersController {
   async calculatePricing(
     @Query('platform') platform: string,
     @Query('service') service: string,
+    @Query('serviceId') serviceId: string,
     @Query('quantity') quantity: string,
     @Query('currency') currency: string = 'NGN'
   ) {
@@ -43,7 +71,8 @@ export class OrdersController {
       platform,
       service,
       parseInt(quantity),
-      currency
+      currency,
+      serviceId,
     );
   }
 
@@ -82,8 +111,11 @@ export class OrdersController {
     status: 404,
     description: 'Service not available for the specified platform'
   })
-  async createOrder(@Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.createOrder(createOrderDto);
+  @UseGuards(OptionalAuthGuard)
+  async createOrder(@Body() createOrderDto: CreateOrderDto, @Request() req) {
+    // Link the order to the user when a valid token is supplied (e.g. the
+    // web flow opened from the app); guests still order anonymously.
+    return this.ordersService.createOrder(createOrderDto, req.user?.userId);
   }
 
   @Get(':id')

@@ -15,6 +15,8 @@ export interface WithdrawTransferInput {
   ninNames: string[];
 }
 
+const WITHDRAWAL_TRANSFER_DESCRIPTION = 'Withdrawal from boostlab wallet';
+
 @Injectable()
 export class NyraTransferService {
   private readonly logger = new Logger(NyraTransferService.name);
@@ -91,7 +93,7 @@ export class NyraTransferService {
     const result = await this.nyraApi.initiateTransfer({
       source_account_number: sourceAccount,
       amount: input.amount,
-      description: input.description || `BoostLab withdrawal ${input.clientRequestId}`,
+      description: WITHDRAWAL_TRANSFER_DESCRIPTION,
       sender_name: senderName,
       client_request_id: input.clientRequestId,
       beneficiary: {

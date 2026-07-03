@@ -5,6 +5,11 @@ import { PrismaService } from '../prisma/prisma.service';
 export class PlatformService {
   private readonly logger = new Logger(PlatformService.name);
 
+  // Avoid a DB round-trip per service during catalog syncs; the set of
+  // platforms/categories is tiny and append-only.
+  private platformIdCache = new Map<string, string>();
+  private categoryIdCache = new Map<string, string>();
+
   constructor(private prisma: PrismaService) {}
 
   private extractPlatformFromService(serviceName: string): string {
@@ -64,8 +69,11 @@ export class PlatformService {
   }
 
   async createPlatformIfNotExists(name: string): Promise<string> {
+    const cached = this.platformIdCache.get(name);
+    if (cached) return cached;
+
     const slug = this.slugify(name);
-    
+
     const platform = await this.prisma.platform.upsert({
       where: { name },
       update: {},
@@ -76,12 +84,17 @@ export class PlatformService {
       }
     });
 
+    this.platformIdCache.set(name, platform.id);
     return platform.id;
   }
 
   async createCategoryIfNotExists(name: string, platformId: string): Promise<string> {
+    const cacheKey = `${platformId}|${name}`;
+    const cached = this.categoryIdCache.get(cacheKey);
+    if (cached) return cached;
+
     const slug = this.slugify(name);
-    
+
     const category = await this.prisma.category.upsert({
       where: {
         platformId_slug: {
@@ -98,7 +111,17 @@ export class PlatformService {
       }
     });
 
+    this.categoryIdCache.set(cacheKey, category.id);
     return category.id;
+  }
+
+  // Classify a provider service name without touching the DB — used by the
+  // sync to filter the catalog down to platforms/categories we actually sell.
+  classifyServiceName(serviceName: string): { platform: string; category: string } {
+    return {
+      platform: this.extractPlatformFromService(serviceName),
+      category: this.extractCategoryFromService(serviceName),
+    };
   }
 
   async categorizeService(serviceName: string): Promise<{

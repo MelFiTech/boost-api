@@ -144,7 +144,7 @@ button, input, textarea, select { font: inherit; }
 }
 .custom-range .input-inline { max-width: 150px; min-width: 130px; }
 .period-label { font-size: 0.82rem; margin-left: auto; }
-.metric-card .hint { color: var(--muted); font-size: 0.72rem; margin-top: auto; }
+.metric-card .hint { color: var(--muted); font-size: 0.72rem; margin-top: auto; display: block; line-height: 1.35; }
 .metric-card.provider { border-color: rgba(96,165,250,.2); }
 .metric-card.wallet { border-color: rgba(52,211,153,.2); }
 .metric-card.fees { border-color: rgba(217,255,2,.2); }
@@ -170,6 +170,12 @@ button, input, textarea, select { font: inherit; }
 }
 .metric-card .sub { display: none; }
 .metric-card.accent { border-color: rgba(217,255,2,.25); background: linear-gradient(90deg, rgba(217,255,2,.06), var(--panel)); }
+.metric-card.danger {
+  border-color: rgba(239, 68, 68, .45);
+  background: linear-gradient(90deg, rgba(239, 68, 68, .12), var(--panel));
+}
+.metric-card.danger .value { color: var(--danger); }
+.metric-card.danger .hint { color: #fca5a5; }
 .panel {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   overflow: hidden; margin-bottom: 20px;
@@ -234,6 +240,40 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .badge-pending, .badge-pending_review, .badge-processing { background: var(--warn-soft); color: var(--warn); }
 .badge-verified, .badge-completed, .badge-approved { background: var(--success-soft); color: var(--success); }
 .badge-rejected, .badge-failed, .badge-cancelled { background: var(--danger-soft); color: var(--danger); }
+.badge-issue { background: var(--warn-soft); color: var(--warn); }
+
+.attention-banner {
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--warn);
+  background: var(--warn-soft);
+}
+.attention-banner-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.attention-banner strong { color: var(--warn); }
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.tab-badge.hidden { display: none; }
+.action-group { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .status-bars { display: grid; gap: 10px; padding: 18px; }
 .status-row { display: grid; grid-template-columns: 90px 1fr 40px; gap: 10px; align-items: center; font-size: 0.82rem; }
@@ -325,6 +365,28 @@ pre.json {
 .progress-mini-fill { height: 100%; background: var(--lime); border-radius: 999px; }
 
 .quick-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
+.template-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.template-chip {
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  border-radius: 999px; padding: 8px 14px; font-size: .82rem; cursor: pointer;
+}
+.template-chip:hover { border-color: var(--lime); color: var(--lime); }
+.push-preview {
+  margin: 14px 0; padding: 12px 14px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--border); font-size: .85rem;
+}
+.user-pick-list { max-height: 180px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; margin-top: 8px; }
+.user-pick-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border); font-size: .84rem;
+}
+.user-pick-item:last-child { border-bottom: none; }
+.selected-users { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.selected-user-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--lime-soft); color: var(--lime); border-radius: 999px;
+  padding: 4px 10px; font-size: .78rem;
+}
 .quick-link {
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px; cursor: pointer; text-align: left; color: var(--text);

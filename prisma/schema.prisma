@@ -88,6 +88,7 @@ model Service {
   serviceId    String // from provider
   name         String
   type         String
+  providerCategory String? // category label from provider, e.g. SMMStone category dropdown
   providerRate Float // Original rate in USDT
   boostRate    Float // Our marked up rate in USDT
   minOrder     Int
@@ -121,6 +122,7 @@ model Order {
   status          OrderStatus @default(PENDING)
   price           Float
   providerOrderId String?
+  fulfillmentError String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -437,6 +439,8 @@ model AppSettings {
   aboutPageUrl        String?
   fundingFee          Decimal  @default(0) @db.Decimal(14, 2)
   withdrawalFee       Decimal  @default(0) @db.Decimal(14, 2)
+  smmMarkupPercent    Decimal  @default(10) @db.Decimal(5, 2) // Markup on SMMStone prices
+  smmWebUrl           String? // Hosted Boost (SMM) web flow URL for the mobile app
   updatedBy           String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt

@@ -7,6 +7,10 @@ import { randomBytes } from 'crypto';
 import { NotificationService } from './notification.service';
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { NyraWebhookService } from '../providers/nyra/nyra-webhook.service';
+import { WalletService } from '../wallet/wallet.service';
+import { PinService } from '../pin/pin.service';
+import { OrderFulfillmentService } from '../smmstone/order-fulfillment.service';
+import { WalletTransactionCategory, WalletTransactionType } from '@prisma/client';
 
 @Injectable()
 export class PaymentService {
@@ -18,6 +22,9 @@ export class PaymentService {
     private readonly configService: ConfigService,
     private readonly providerRegistry: ProviderRegistryService,
     private readonly nyraWebhookService: NyraWebhookService,
+    private readonly walletService: WalletService,
+    private readonly pinService: PinService,
+    private readonly orderFulfillment: OrderFulfillmentService,
     @Inject(forwardRef(() => NotificationService))
     private readonly notificationService: NotificationService,
   ) {
@@ -26,6 +33,87 @@ export class PaymentService {
 
   private newPaymentReference(): string {
     return `pay${randomBytes(8).toString('hex')}`;
+  }
+
+  /**
+   * Pays an order by debiting the user's managed wallet — no virtual
+   * account involved. Requires the user's transaction PIN, mirroring the
+   * bills flow. The order is claimed for the user if it was created as a
+   * guest order in the same session.
+   */
+  async payWithWallet(orderId: string, userId: string, pin: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payment: true, service: { include: { category: true } }, platform: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+    if (order.userId && order.userId !== userId) {
+      throw new BadRequestException('This order belongs to another account');
+    }
+    if (order.payment && order.payment.status === PaymentStatus.COMPLETED) {
+      throw new BadRequestException('Payment already completed for this order');
+    }
+
+    await this.pinService.requireValidPin(userId, pin);
+
+    // Debit first — throws on insufficient balance
+    const debit = await this.walletService.applyLedgerEntry({
+      userId,
+      type: WalletTransactionType.DEBIT,
+      category: WalletTransactionCategory.SMM_ORDER,
+      amount: order.price,
+      narration: `${order.platform.name} ${order.service.category?.name || 'boost'} x${order.quantity}`,
+      referencePrefix: 'ord',
+      metadata: {
+        orderId: order.id,
+        platform: order.platform.name,
+        service: order.service.category?.name || order.service.name,
+      },
+    });
+
+    const payment = await this.prisma.payment.upsert({
+      where: { orderId: order.id },
+      update: {
+        method: PaymentMethod.NGN,
+        status: PaymentStatus.COMPLETED,
+        gatewayRef: debit.reference,
+        updatedAt: new Date(),
+      },
+      create: {
+        orderId: order.id,
+        amount: order.price,
+        currency: 'NGN',
+        method: PaymentMethod.NGN,
+        status: PaymentStatus.COMPLETED,
+        gatewayRef: debit.reference,
+      },
+    });
+
+    if (!order.userId) {
+      await this.prisma.order.update({ where: { id: order.id }, data: { userId } });
+    }
+
+    this.logger.log(`Order ${order.id} paid from wallet (${debit.reference})`);
+
+    // Hand straight to the provider; failures leave the order on the
+    // admin attention list without affecting the payment
+    const fulfillment = await this.orderFulfillment.fulfillOrder(order.id);
+
+    return {
+      success: true,
+      data: {
+        orderId: order.id,
+        paymentId: payment.id,
+        status: payment.status.toLowerCase(),
+        amount: order.price.toString(),
+        currency: 'NGN',
+        walletReference: debit.reference,
+        fulfillment: fulfillment.submitted ? 'submitted' : 'queued',
+      },
+    };
   }
 
   async initiatePayment(initiatePaymentDto: InitiatePaymentDto) {
@@ -88,23 +176,34 @@ export class PaymentService {
 
       if (initiatePaymentDto.provider === PaymentProvider.NYRA) {
         const fundingProvider = await this.providerRegistry.getFundingProvider();
-        const virtualAccount = await fundingProvider.createFundingAccount({
-          amount: Math.round(amountNgn),
-          currency: 'NGN',
-          reference,
-          customerEmail: initiatePaymentDto.email || 'customer@boostlab.com',
-          customerName: initiatePaymentDto.customerName,
-          customerPhone: initiatePaymentDto.phone,
-          nameOnAccount: initiatePaymentDto.customerName
-            ? `${initiatePaymentDto.customerName} / BOOSTLAB`
-            : undefined,
-        });
+        let virtualAccount;
+        try {
+          virtualAccount = await fundingProvider.createFundingAccount({
+            amount: Math.round(amountNgn),
+            currency: 'NGN',
+            reference,
+            customerEmail: initiatePaymentDto.email || 'customer@boostlab.com',
+            customerName: initiatePaymentDto.customerName,
+            customerPhone: initiatePaymentDto.phone,
+            nameOnAccount: initiatePaymentDto.customerName
+              ? `${initiatePaymentDto.customerName} / BOOSTLAB`
+              : undefined,
+          });
+        } catch (error) {
+          const providerMessage =
+            error.response?.data?.message || error.response?.data?.error || error.message;
+          this.logger.error(
+            `Funding account creation failed: ${providerMessage}`,
+            JSON.stringify(error.response?.data || {}),
+          );
+          throw new BadRequestException(`Could not create payment account: ${providerMessage}`);
+        }
 
         return {
           success: true,
           data: {
             reference,
-            amount: amountNgn.toString(),
+            amount: amountNgn.toFixed(2),
             currency: 'NGN',
             accountNumber: virtualAccount.accountNumber,
             bankName: virtualAccount.bankName,

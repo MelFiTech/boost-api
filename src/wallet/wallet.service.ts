@@ -10,6 +10,7 @@ import {
   TransactionStatus,
   WalletTransactionCategory,
   WalletTransactionType,
+  BillType,
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { BankAccountsService } from '../bank-accounts/bank-accounts.service';
@@ -20,7 +21,9 @@ import { PinService } from '../pin/pin.service';
 import { NyraTransferService } from '../providers/nyra/nyra-transfer.service';
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationService } from '../services/notification.service';
 import { WalletGateway } from './wallet.gateway';
+import { formatTransactionTitle } from './transaction-title.util';
 
 export interface LedgerEntryInput {
   userId: string;
@@ -47,6 +50,7 @@ export class WalletService implements OnModuleInit {
     private readonly nyraTransferService: NyraTransferService,
     private readonly walletGateway: WalletGateway,
     private readonly appSettingsService: AppSettingsService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   onModuleInit() {
@@ -57,6 +61,62 @@ export class WalletService implements OnModuleInit {
     void this.getWallet(userId)
       .then((wallet) => this.walletGateway.pushUpdate(userId, wallet))
       .catch((error) => this.logger.warn(`Wallet push failed for ${userId}: ${error.message}`));
+  }
+
+  private serializeTransaction(
+    tx: {
+      id: string;
+      type: WalletTransactionType;
+      category: WalletTransactionCategory;
+      amount: Prisma.Decimal;
+      balanceAfter: Prisma.Decimal;
+      reference: string;
+      status: TransactionStatus;
+      narration: string | null;
+      metadata: Prisma.JsonValue;
+      createdAt: Date;
+      billPayment?: {
+        billType: BillType;
+        metadata: Prisma.JsonValue;
+      } | null;
+    },
+  ) {
+    const metadata = (tx.metadata || {}) as Record<string, unknown>;
+    const billPayment = tx.billPayment
+      ? {
+          billType: tx.billPayment.billType,
+          metadata: (tx.billPayment.metadata || {}) as Record<string, unknown>,
+        }
+      : null;
+
+    return {
+      id: tx.id,
+      type: tx.type,
+      category: tx.category,
+      amount: tx.amount.toString(),
+      balanceAfter: tx.balanceAfter.toString(),
+      reference: tx.reference,
+      status: tx.status,
+      narration: tx.narration,
+      title: formatTransactionTitle({
+        category: tx.category,
+        narration: tx.narration,
+        metadata,
+        billPayment,
+      }),
+      createdAt: tx.createdAt.toISOString(),
+    };
+  }
+
+  private async pushTransactionUpdate(userId: string, transactionId: string) {
+    const tx = await this.prisma.walletTransaction.findUnique({
+      where: { id: transactionId },
+      include: { billPayment: true },
+    });
+    if (!tx) return;
+    const payload = this.serializeTransaction(tx);
+    this.walletGateway.pushTransaction(userId, payload);
+    void this.notificationService.notifyWalletTransaction(userId, payload);
   }
 
   private newReference(prefix: string): string {
@@ -84,16 +144,22 @@ export class WalletService implements OnModuleInit {
 
   async getTransactions(userId: string, page = 1, limit = 20) {
     const wallet = await this.getOrCreateWallet(userId);
-    const [items, total] = await this.prisma.$transaction([
+    const [rows, total] = await this.prisma.$transaction([
       this.prisma.walletTransaction.findMany({
         where: { walletId: wallet.id },
+        include: { billPayment: true },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
       this.prisma.walletTransaction.count({ where: { walletId: wallet.id } }),
     ]);
-    return { items, total, page, limit };
+    return {
+      items: rows.map((tx) => this.serializeTransaction(tx)),
+      total,
+      page,
+      limit,
+    };
   }
 
   /**
@@ -148,6 +214,7 @@ export class WalletService implements OnModuleInit {
       });
     }).then((transaction) => {
       this.pushBalanceUpdate(entry.userId);
+      void this.pushTransactionUpdate(entry.userId, transaction.id);
       return transaction;
     });
   }
@@ -283,6 +350,7 @@ export class WalletService implements OnModuleInit {
     });
 
     this.pushBalanceUpdate(pending.wallet.userId);
+    void this.pushTransactionUpdate(pending.wallet.userId, confirmed.id);
     return confirmed;
   }
 
@@ -355,7 +423,6 @@ export class WalletService implements OnModuleInit {
         amount,
         bankAccount,
         clientRequestId: debit.reference,
-        description: `BoostLab withdrawal ${debit.reference}`,
         bvnNames: kyc.bvnNames,
         ninNames: kyc.ninNames,
       });

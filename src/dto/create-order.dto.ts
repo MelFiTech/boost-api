@@ -53,6 +53,14 @@ export class CreateOrderDto {
   @IsEnum(ServiceType)
   service: ServiceType;
 
+  @ApiPropertyOptional({
+    example: '11773',
+    description: 'Exact SMMStone provider service id selected from the catalog',
+  })
+  @IsString()
+  @IsOptional()
+  providerServiceId?: string;
+
   @ApiProperty({ example: 1000, minimum: 1 })
   @IsNumber()
   @Min(1)

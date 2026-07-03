@@ -23,6 +23,9 @@ import { PaymentService } from './services/payment.service';
 import { NotificationService } from './services/notification.service';
 import { UserService } from './services/user.service';
 import { AdminDashboardService } from './services/admin-dashboard.service';
+import { AdminOrdersService } from './services/admin-orders.service';
+import { ResendService } from './services/resend.service';
+import { AdminOrdersController } from './controllers/admin-orders.controller';
 import { SmmstoneService } from './smmstone/smmstone.service';
 import { SMMController } from './controllers/smm.controller';
 import { OrdersController } from './controllers/orders.controller';
@@ -51,8 +54,8 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     PinModule,
     AdminUiModule,
   ],
-  controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController, UserController, UserOrdersController],
-  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, NotificationService, UserService, SmmstoneService, AdminDashboardService],
+  controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController, AdminOrdersController, UserController, UserOrdersController],
+  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, NotificationService, UserService, SmmstoneService, AdminDashboardService, AdminOrdersService, ResendService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto, PaymentMethod, OrderPlatform, ServiceType } from '../dto/create-order.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ResendService } from './resend.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 
 @Injectable()
 export class OrdersService {
@@ -13,113 +14,278 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly resendService: ResendService,
+    private readonly appSettingsService: AppSettingsService,
   ) {}
 
-  async calculateServicePricing(platform: string, service: string, quantity: number, currency: string = 'NGN') {
-    this.logger.debug(`Calculating pricing for ${platform} ${service} quantity: ${quantity}`);
+  /**
+   * Effective per-1000 rate charged to the user, in USDT.
+   * Applies the live admin markup to the raw SMMStone provider rate — so
+   * markup changes take effect immediately without re-syncing services.
+   */
+  private applyMarkup(providerRate: number, markupPercent: number): number {
+    return providerRate * (1 + markupPercent / 100);
+  }
 
-    // Find the service from SMMService table that matches platform and service type
-    // Map service types to search terms - use exact terms found in the database
-    const serviceSearchMap: { [key: string]: string } = {
-      'followers': 'Followers',
-      'likes': 'Like',
-      'views': 'View',
-      'comments': 'Comment',
-      'shares': 'Share',
-      'subscribers': 'Subscrib'
+  // The UI service label maps to a stored Category name. Subscribers/members
+  // are classified under "Followers" during sync, so YouTube/Telegram "followers"
+  // resolve correctly even though their provider names say Subscribers/Members.
+  private static readonly SERVICE_CATEGORY_MAP: Record<string, string> = {
+    followers: 'Followers',
+    subscribers: 'Followers',
+    members: 'Followers',
+    likes: 'Likes',
+    views: 'Views',
+    comments: 'Comments',
+    shares: 'Shares',
+  };
+
+  private static readonly PLATFORM_NAME_MAP: Record<string, string> = {
+    instagram: 'Instagram',
+    facebook: 'Facebook',
+    twitter: 'Twitter',
+    youtube: 'YouTube',
+    tiktok: 'TikTok',
+    snapchat: 'Snapchat',
+    telegram: 'Telegram',
+    linkedin: 'LinkedIn',
+    pinterest: 'Pinterest',
+    twitch: 'Twitch',
+    discord: 'Discord',
+    reddit: 'Reddit',
+  };
+
+  // Categories we surface in the ordering UI, with platform-specific labels.
+  private static readonly CATALOG_SERVICES: Array<{ id: string; category: string }> = [
+    { id: 'followers', category: 'Followers' },
+    { id: 'likes', category: 'Likes' },
+    { id: 'views', category: 'Views' },
+    { id: 'comments', category: 'Comments' },
+  ];
+
+  private resolvePlatformName(platform: string): string {
+    return OrdersService.PLATFORM_NAME_MAP[platform.toLowerCase()] || platform;
+  }
+
+  private resolveCategoryName(service: string): string {
+    return OrdersService.SERVICE_CATEGORY_MAP[service.toLowerCase()] || service;
+  }
+
+  private serviceLabel(serviceId: string, platformName: string): string {
+    if (serviceId === 'followers') {
+      if (platformName === 'YouTube') return 'Subscribers';
+      if (platformName === 'Telegram') return 'Members';
+      return 'Followers';
+    }
+    return serviceId.charAt(0).toUpperCase() + serviceId.slice(1);
+  }
+
+  private broadCategoryToServiceType(broadCategory: string): string {
+    switch (broadCategory) {
+      case 'Likes':
+        return 'likes';
+      case 'Views':
+        return 'views';
+      case 'Comments':
+        return 'comments';
+      case 'Shares':
+        return 'shares';
+      default:
+        return 'followers';
+    }
+  }
+
+  /** Match SMMStone panel ordering: subscribers/followers → views → likes → comments. */
+  private static categorySortKey(label: string): number {
+    const l = label.toLowerCase();
+    if (/subscriber|follower|member/.test(l)) return 0;
+    if (/view|watch/.test(l)) return 1;
+    if (/like/.test(l)) return 2;
+    if (/comment/.test(l)) return 3;
+    return 4;
+  }
+
+  private static providerCategoryId(label: string): string {
+    return Buffer.from(label, 'utf8').toString('base64url');
+  }
+
+  /**
+   * Resolve the cheapest active service for a platform + service label that can
+   * fulfil the requested quantity. Matches on the structured platform/category
+   * relations (not fragile name string matching) with Nigerian-first priority.
+   */
+  private async findBestService(platform: string, service: string, quantity: number) {
+    const platformName = this.resolvePlatformName(platform);
+    const categoryName = this.resolveCategoryName(service);
+
+    const base = {
+      active: true,
+      minOrder: { lte: quantity },
+      maxOrder: { gte: quantity },
+      platform: { name: { equals: platformName, mode: 'insensitive' as const } },
+      category: { name: { equals: categoryName, mode: 'insensitive' as const } },
     };
 
-    const searchTerm = serviceSearchMap[service.toLowerCase()] || service;
-
-    // Platform name mapping to handle variations
-    const platformMap: { [key: string]: string } = {
-      'instagram': 'Instagram',
-      'facebook': 'Facebook',
-      'twitter': 'Twitter',
-      'youtube': 'YouTube',
-      'tiktok': 'TikTok',
-      'snapchat': 'Snapchat',
-      'telegram': 'Telegram',
-      'linkedin': 'LinkedIn',
-      'pinterest': 'Pinterest',
-      'twitch': 'Twitch',
-      'discord': 'Discord',
-      'reddit': 'Reddit'
-    };
-
-    const platformName = platformMap[platform.toLowerCase()] || platform;
-
-    // First try to find services for the specific platform with Nigerian priority
-    let serviceRecord = await this.prisma.service.findFirst({
-      where: {
-        AND: [
-          {
-            name: {
-              contains: platformName, // Use the actual platform requested
-              mode: 'insensitive'
-            }
-          },
-          {
-            name: {
-              contains: searchTerm,
-              mode: 'insensitive'
-            }
-          },
-          {
-            name: {
-              contains: 'Nigeria', // Prioritize Nigerian services
-              mode: 'insensitive'
-            }
-          },
-          {
-            active: true
-          },
-          {
-            minOrder: { lte: quantity }
-          },
-          {
-            maxOrder: { gte: quantity }
-          }
-        ]
-      },
-      orderBy: {
-        boostRate: 'asc' // Get cheapest Nigerian option first
-      }
+    // Prefer Nigerian-targeted services when available
+    let record = await this.prisma.service.findFirst({
+      where: { ...base, name: { contains: 'Nigeria', mode: 'insensitive' } },
+      include: { category: true, platform: true },
+      orderBy: { boostRate: 'asc' },
     });
 
-    // If no Nigerian service found for the platform, fall back to general services for the platform
-    if (!serviceRecord) {
-      serviceRecord = await this.prisma.service.findFirst({
-        where: {
-          AND: [
-            {
-              name: {
-                contains: platformName, // Use the actual platform requested
-                mode: 'insensitive'
-              }
-            },
-            {
-              name: {
-                contains: searchTerm,
-                mode: 'insensitive'
-              }
-            },
-            {
-              active: true
-            },
-            {
-              minOrder: { lte: quantity }
-            },
-            {
-              maxOrder: { gte: quantity }
-            }
-          ]
-        },
-        orderBy: {
-          boostRate: 'asc' // Get cheapest option first
-        }
+    if (!record) {
+      record = await this.prisma.service.findFirst({
+        where: base,
+        include: { category: true, platform: true },
+        orderBy: { boostRate: 'asc' },
       });
     }
+
+    return record;
+  }
+
+  private async findServiceByProviderId(providerServiceId: string, quantity: number) {
+    if (!providerServiceId) return null;
+    return this.prisma.service.findFirst({
+      where: {
+        serviceId: String(providerServiceId),
+        active: true,
+        minOrder: { lte: quantity },
+        maxOrder: { gte: quantity },
+      },
+      include: { category: true, platform: true },
+    });
+  }
+
+  /**
+   * Available platforms → services with valid quantity ranges. The web/app order
+   * pages use this to render only supported combinations and auto-select valid
+   * quantities, so users never hit "no service found" errors.
+   */
+  async getServiceCatalog() {
+    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const markupPercent = await this.appSettingsService.getSmmMarkupPercent();
+
+    const services = await this.prisma.service.findMany({
+      where: { active: true, providerCategory: { not: null } },
+      include: { platform: true, category: true },
+      orderBy: [{ platform: { name: 'asc' } }, { providerCategory: 'asc' }, { boostRate: 'asc' }],
+    });
+
+    const byPlatform = new Map<
+      string,
+      {
+        id: string;
+        label: string;
+        categories: Map<
+          string,
+          {
+            id: string;
+            label: string;
+            services: Array<{
+              id: string;
+              label: string;
+              providerServiceId: string;
+              providerRate: number;
+              boostRate: number;
+              pricePerThousandNgn: number;
+              serviceType: string;
+              minOrder: number;
+              maxOrder: number;
+              dripfeed: boolean;
+              refill: boolean;
+              cancel: boolean;
+              broadCategory: string;
+            }>;
+          }
+        >;
+      }
+    >();
+
+    for (const service of services) {
+      const platformId = service.platform.slug || service.platform.name.toLowerCase();
+      if (!byPlatform.has(platformId)) {
+        byPlatform.set(platformId, {
+          id: platformId,
+          label: service.platform.name,
+          categories: new Map(),
+        });
+      }
+
+      const platform = byPlatform.get(platformId)!;
+      const categoryLabel = service.providerCategory!;
+      const categoryId = OrdersService.providerCategoryId(categoryLabel);
+      if (!platform.categories.has(categoryId)) {
+        platform.categories.set(categoryId, {
+          id: categoryId,
+          label: categoryLabel,
+          services: [],
+        });
+      }
+
+      platform.categories.get(categoryId)!.services.push({
+        id: service.serviceId,
+        providerServiceId: service.serviceId,
+        label: service.name,
+        providerRate: service.providerRate,
+        boostRate: service.boostRate,
+        pricePerThousandNgn:
+          Math.round(this.applyMarkup(service.providerRate, markupPercent) * exchangeRate * 100) / 100,
+        serviceType: this.broadCategoryToServiceType(service.category.name),
+        minOrder: service.minOrder,
+        maxOrder: service.maxOrder,
+        dripfeed: service.dripfeed,
+        refill: service.refill,
+        cancel: service.cancel,
+        broadCategory: service.category.name,
+      });
+    }
+
+    // Emit platforms in the curated UI order, only those with sellable services.
+    const orderedPlatforms = ['Instagram', 'TikTok', 'YouTube', 'Twitter', 'Facebook', 'Telegram'];
+    const catalog = [];
+    for (const platformName of orderedPlatforms) {
+      const slug = OrdersService.PLATFORM_NAME_MAP[platformName.toLowerCase()] || platformName;
+      const platform =
+        byPlatform.get(platformName.toLowerCase()) ||
+        [...byPlatform.values()].find((p) => p.label === platformName);
+      if (!platform || platform.categories.size === 0) continue;
+      const categories = [...platform.categories.values()]
+        .filter((c) => c.services.length > 0)
+        .sort(
+          (a, b) =>
+            OrdersService.categorySortKey(a.label) - OrdersService.categorySortKey(b.label) ||
+            a.label.localeCompare(b.label),
+        );
+
+      catalog.push({
+        id: platform.id || slug.toLowerCase(),
+        label: platform.label,
+        categories,
+        // Backward compatibility for old clients that expect broad service buttons.
+        services: OrdersService.CATALOG_SERVICES.map(({ id, category }) => {
+          const matching = [...platform.categories.values()].flatMap((c) =>
+            c.services.filter((s) => s.broadCategory === category),
+          );
+          if (matching.length === 0) return null;
+          return {
+            id,
+            label: this.serviceLabel(id, platformName),
+            minOrder: Math.min(...matching.map((s) => s.minOrder)),
+            maxOrder: Math.max(...matching.map((s) => s.maxOrder)),
+          };
+        }).filter(Boolean),
+      });
+    }
+
+    return { platforms: catalog };
+  }
+
+  async calculateServicePricing(platform: string, service: string, quantity: number, currency: string = 'NGN', providerServiceId?: string) {
+    this.logger.debug(`Calculating pricing for ${platform} ${service} quantity: ${quantity}`);
+
+    const serviceRecord =
+      (providerServiceId ? await this.findServiceByProviderId(providerServiceId, quantity) : null) ||
+      (await this.findBestService(platform, service, quantity));
 
     if (!serviceRecord) {
       throw new NotFoundException(
@@ -135,11 +301,12 @@ export class OrdersService {
       );
     }
 
-    // Calculate price using our boost rate (which includes markup)
-    // boostRate is per 1000 units, so we calculate: (boostRate / 1000) * quantity
-    const pricePerUnit = serviceRecord.boostRate / 1000;
+    // Apply the live admin markup to the raw provider rate (per 1000 units)
+    const markupPercent = await this.appSettingsService.getSmmMarkupPercent();
+    const ourRate = this.applyMarkup(serviceRecord.providerRate, markupPercent);
+    const pricePerUnit = ourRate / 1000;
     const basePriceUSDT = pricePerUnit * quantity;
-    
+
     // Convert to requested currency
     let finalPrice = basePriceUSDT;
     const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
@@ -154,8 +321,11 @@ export class OrdersService {
       currency: currency,
       price: Math.round(finalPrice * 100) / 100, // Round to 2 decimal places
       serviceName: serviceRecord.name,
+      providerServiceId: serviceRecord.serviceId,
+      category: serviceRecord.providerCategory || serviceRecord.category.name,
       providerRate: serviceRecord.providerRate,
-      ourRate: serviceRecord.boostRate,
+      ourRate: Math.round(ourRate * 100000) / 100000,
+      markupPercent,
       minOrder: serviceRecord.minOrder,
       maxOrder: serviceRecord.maxOrder,
       calculation: {
@@ -166,120 +336,19 @@ export class OrdersService {
     };
   }
 
-  async createOrder(createOrderDto: CreateOrderDto) {
+  async createOrder(createOrderDto: CreateOrderDto, userId?: string) {
     this.logger.debug(`Creating order for ${createOrderDto.platform} ${createOrderDto.service}`);
 
     try {
-      // Find the service from SMMService table that matches platform and service type
-      // Map service types to search terms - use exact terms found in the database
-      const serviceSearchMap: { [key: string]: string } = {
-        'followers': 'Followers',
-        'likes': 'Like',
-        'views': 'View',
-        'comments': 'Comment',
-        'shares': 'Share',
-        'subscribers': 'Subscrib'
-      };
-
-      const searchTerm = serviceSearchMap[createOrderDto.service.toLowerCase()] || createOrderDto.service;
-
-      // Platform name mapping to handle variations
-      const platformMap: { [key: string]: string } = {
-        'instagram': 'Instagram',
-        'facebook': 'Facebook',
-        'twitter': 'Twitter',
-        'youtube': 'YouTube',
-        'tiktok': 'TikTok',
-        'snapchat': 'Snapchat',
-        'telegram': 'Telegram',
-        'linkedin': 'LinkedIn',
-        'pinterest': 'Pinterest',
-        'twitch': 'Twitch',
-        'discord': 'Discord',
-        'reddit': 'Reddit'
-      };
-
-      const platformName = platformMap[createOrderDto.platform.toLowerCase()] || createOrderDto.platform;
-
-      // First try to find services for the specific platform with Nigerian priority
-      let smmService = await this.prisma.service.findFirst({
-        where: {
-          AND: [
-            {
-              name: {
-                contains: platformName, // Use the actual platform requested
-                mode: 'insensitive'
-              }
-            },
-            {
-              name: {
-                contains: searchTerm,
-                mode: 'insensitive'
-              }
-            },
-            {
-              name: {
-                contains: 'Nigeria', // Prioritize Nigerian services
-                mode: 'insensitive'
-              }
-            },
-            {
-              active: true
-            },
-            {
-              minOrder: { lte: createOrderDto.quantity }
-            },
-            {
-              maxOrder: { gte: createOrderDto.quantity }
-            }
-          ]
-        },
-        include: {
-          category: true,
-          platform: true
-        },
-        orderBy: {
-          boostRate: 'asc' // Get cheapest Nigerian option first
-        }
-      });
-
-      // If no Nigerian service found for the platform, fall back to general services for the platform
-      if (!smmService) {
-        smmService = await this.prisma.service.findFirst({
-          where: {
-            AND: [
-              {
-                name: {
-                  contains: platformName, // Use the actual platform requested
-                  mode: 'insensitive'
-                }
-              },
-              {
-                name: {
-                  contains: searchTerm,
-                  mode: 'insensitive'
-                }
-              },
-              {
-                active: true
-              },
-              {
-                minOrder: { lte: createOrderDto.quantity }
-              },
-              {
-                maxOrder: { gte: createOrderDto.quantity }
-              }
-            ]
-          },
-          include: {
-            category: true,
-            platform: true
-          },
-          orderBy: {
-            boostRate: 'asc' // Get cheapest option first
-          }
-        });
-      }
+      const smmService =
+        (createOrderDto.providerServiceId
+          ? await this.findServiceByProviderId(createOrderDto.providerServiceId, createOrderDto.quantity)
+          : null) ||
+        (await this.findBestService(
+          createOrderDto.platform,
+          createOrderDto.service,
+          createOrderDto.quantity,
+        ));
 
       if (!smmService) {
         throw new NotFoundException(
@@ -295,25 +364,29 @@ export class OrdersService {
         );
       }
 
-      // Calculate pricing using boost rate (which includes our markup)
-      // boostRate is per 1000 units, so we calculate: (boostRate / 1000) * quantity
-      const pricePerUnit = smmService.boostRate / 1000;
+      // Price = raw provider rate + live admin markup (per 1000 units).
+      // This recomputed value is authoritative — it's what we debit — so a
+      // stale client price can never undercharge.
+      const markupPercent = await this.appSettingsService.getSmmMarkupPercent();
+      const ourRate = this.applyMarkup(smmService.providerRate, markupPercent);
+      const pricePerUnit = ourRate / 1000;
       const basePriceUSDT = pricePerUnit * createOrderDto.quantity;
-      
+
       // Convert to requested currency
       let calculatedPrice = basePriceUSDT;
       const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
       if (createOrderDto.currency === 'NGN') {
         calculatedPrice = basePriceUSDT * exchangeRate; // USDT to NGN conversion at current exchange rate
       }
+      calculatedPrice = Math.round(calculatedPrice * 100) / 100;
 
       const providedPrice = parseFloat(createOrderDto.amount);
-      
+
       // Validate price (allow 5% tolerance for rounding differences)
       const priceDifference = Math.abs(calculatedPrice - providedPrice) / calculatedPrice;
       if (priceDifference > 0.05) {
         throw new BadRequestException(
-          `Price mismatch. Expected: ${calculatedPrice.toFixed(2)} ${createOrderDto.currency}, but got: ${createOrderDto.amount} ${createOrderDto.currency}. Provider rate: $${smmService.providerRate}, Our rate: $${smmService.boostRate} per 1000`
+          `Price mismatch. Expected: ${calculatedPrice.toFixed(2)} ${createOrderDto.currency}, but got: ${createOrderDto.amount} ${createOrderDto.currency}. Provider rate: $${smmService.providerRate}, Our rate: $${ourRate.toFixed(5)} per 1000`
         );
       }
 
@@ -342,10 +415,12 @@ export class OrdersService {
 
       // Create order and payment in a transaction
       const result = await this.prisma.$transaction(async (tx) => {
-        // Create the order - MANUAL APPROVAL REQUIRED
-        // Order will remain PENDING until admin manually approves and sends to provider
+        // Create the order — PENDING until payment confirms, then it is
+        // submitted to the provider automatically (OrderFulfillmentService).
+        // Admin only intervenes on stuck/failed orders.
         const order = await tx.order.create({
           data: {
+            userId: userId || null,
             platformId: platform.id,
             serviceId: service.id,
             quantity: createOrderDto.quantity,
@@ -389,6 +464,9 @@ export class OrdersService {
         paymentMethod: createOrderDto.paymentMethod,
         platform: createOrderDto.platform,
         service: createOrderDto.service,
+        providerServiceId: service.serviceId,
+        serviceName: service.name,
+        category: service.providerCategory || service.category.name,
         quantity: createOrderDto.quantity,
         socialUrl: createOrderDto.socialUrl,
         createdAt: result.order.createdAt.toISOString(),

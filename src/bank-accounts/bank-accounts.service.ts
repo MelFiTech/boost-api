@@ -54,6 +54,44 @@ export class BankAccountsService {
     return this.toResponse(account);
   }
 
+  async resolveAccount(
+    userId: string,
+    input: { bankCode: string; accountNumber: string },
+  ) {
+    if (!/^\d{10}$/.test(input.accountNumber)) {
+      throw new BadRequestException('Account number must be exactly 10 digits');
+    }
+    if (!input.bankCode?.trim()) {
+      throw new BadRequestException('bankCode is required');
+    }
+
+    const kyc = await this.prisma.userKyc.findUnique({ where: { userId } });
+    if (!kyc || kyc.status !== KycStatus.VERIFIED) {
+      throw new BadRequestException(
+        'Your KYC must be approved by admin before adding a bank account',
+      );
+    }
+
+    const devMode = isKycDevMode(this.configService);
+    const accountName = devMode
+      ? this.buildDevAccountName(kyc.bvnNames, kyc.ninNames)
+      : await this.resolveAccountName(input.accountNumber, input.bankCode.trim());
+
+    const banks = await this.getTransferBanks();
+    const bank = banks.find((item) => item.code === input.bankCode.trim());
+    const identityMatches =
+      devMode ||
+      accountNameMatchesIdentity(accountName, kyc.bvnNames, kyc.ninNames, 2);
+
+    return {
+      accountNumber: input.accountNumber,
+      bankCode: input.bankCode.trim(),
+      bankName: bank?.name,
+      accountName,
+      identityMatches,
+    };
+  }
+
   async addAccount(userId: string, input: AddBankAccountInput) {
     if (!/^\d{10}$/.test(input.accountNumber)) {
       throw new BadRequestException('Account number must be exactly 10 digits');
@@ -183,7 +221,11 @@ export class BankAccountsService {
     bankCode: string,
   ): Promise<string> {
     const enquiry = await this.nyraApi.transferNameEnquiry(accountNumber, bankCode);
-    return enquiry.account.name;
+    const accountName = enquiry.account.name?.trim();
+    if (!accountName) {
+      throw new BadRequestException('Could not resolve account name for this account number');
+    }
+    return accountName;
   }
 
   private toResponse(account: {

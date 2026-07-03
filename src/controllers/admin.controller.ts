@@ -9,6 +9,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SmmstoneService } from '../smmstone/smmstone.service';
 import { NotificationService } from '../services/notification.service';
 import { AdminDashboardService, DashboardPeriod } from '../services/admin-dashboard.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 
 class UpdateRatesDto {
   @IsOptional()
@@ -44,6 +45,7 @@ export class AdminController {
     private readonly smmstoneService: SmmstoneService,
     private readonly notificationService: NotificationService,
     private readonly adminDashboardService: AdminDashboardService,
+    private readonly appSettingsService: AppSettingsService,
   ) {}
 
   @Get('rates')
@@ -54,9 +56,10 @@ export class AdminController {
     type: RatesResponseDto
   })
   async getCurrentRates(): Promise<RatesResponseDto> {
-    const markupPercentage = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
+    // Markup is persisted in AppSettings (live); exchange rate stays env-based
+    const markupPercentage = await this.appSettingsService.getSmmMarkupPercent();
     const usdtExchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
-    
+
     // Example calculation
     const exampleProviderRate = 1.0; // $1 USDT
     const exampleBoostRate = exampleProviderRate * (1 + markupPercentage / 100);
@@ -114,31 +117,32 @@ export class AdminController {
     }
   })
   async updateRates(@Body() updateRatesDto: UpdateRatesDto) {
-    const currentMarkup = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
+    const previousMarkup = await this.appSettingsService.getSmmMarkupPercent();
     const currentExchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
 
-    // Note: In a production environment, you would update these in a database or configuration store
-    // For now, we'll demonstrate the response format and logic
+    // Markup is persisted in AppSettings and applied live at pricing time —
+    // no re-sync needed. Exchange rate is still env-configured.
+    let newMarkup = previousMarkup;
+    if (updateRatesDto.markupPercentage !== undefined) {
+      const updated = await this.appSettingsService.updateSettings({
+        smmMarkupPercent: updateRatesDto.markupPercentage,
+      });
+      newMarkup = parseFloat(updated.smmMarkupPercent.toString());
+    }
 
-    const response = {
+    return {
       success: true,
       message: 'Rates updated successfully',
       previousRates: {
-        markupPercentage: currentMarkup,
-        usdtExchangeRate: currentExchangeRate
+        markupPercentage: previousMarkup,
+        usdtExchangeRate: currentExchangeRate,
       },
       newRates: {
-        markupPercentage: updateRatesDto.markupPercentage || currentMarkup,
-        usdtExchangeRate: updateRatesDto.usdtExchangeRate || currentExchangeRate
+        markupPercentage: newMarkup,
+        usdtExchangeRate: updateRatesDto.usdtExchangeRate || currentExchangeRate,
       },
-      affectedServices: 3490, // This would come from a database count
-      instructions: 'Run POST /api/v1/admin/recalculate-prices to update all service prices'
+      note: 'Markup applies immediately to all new orders — no re-sync required.',
     };
-
-    // TODO: Implement actual rate update logic
-    // This would typically update environment variables or database settings
-    
-    return response;
   }
 
   @Post('recalculate-prices')
@@ -2065,15 +2069,27 @@ export class AdminController {
   @UseGuards(JwtAuthGuard)
   async getSMMStoneBalance() {
     try {
-      const balance = await this.smmstoneService.getBalance();
+      const threshold = parseFloat(process.env.SMMSTONE_LOW_BALANCE_THRESHOLD || '10');
+      const status = await this.smmstoneService.getBalanceStatus(threshold);
+      const pendingDueToLowBalance = await this.prisma.order.count({
+        where: {
+          status: 'PENDING',
+          providerOrderId: null,
+          fulfillmentError: { contains: 'LOW_PROVIDER_BALANCE' },
+          payment: { status: 'COMPLETED' },
+        },
+      });
       return {
         success: true,
-        data: balance
+        data: {
+          ...status,
+          pendingDueToLowBalance,
+        },
       };
     } catch (error) {
       return {
         success: false,
-        error: error.message
+        error: error.message,
       };
     }
   }

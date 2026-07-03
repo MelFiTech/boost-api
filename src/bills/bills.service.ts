@@ -10,6 +10,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FeaturesService } from '../features/features.service';
 import { PinService } from '../pin/pin.service';
 import { NyraVasApiService } from '../providers/nyra/nyra-vas-api.service';
+import {
+  NyraVasValidateElectricityResult,
+  NyraVasValidateTvResult,
+} from '../providers/nyra/nyra-vas.types';
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { PayBillResult } from '../providers/provider.types';
 import { WalletService } from '../wallet/wallet.service';
@@ -18,6 +22,7 @@ export interface PayBillInput {
   billType: BillType;
   customerIdentifier: string;
   billerCode?: string;
+  billerName?: string;
   amount: number;
   network?: string;
   bundleId?: string;
@@ -57,6 +62,9 @@ export class BillsService {
     if (input.amount < 100) {
       throw new BadRequestException('Minimum bill amount is ₦100');
     }
+    if (input.billType === BillType.ELECTRICITY && input.amount < 1000) {
+      throw new BadRequestException('Minimum electricity amount is ₦1000');
+    }
 
     this.validatePayInput(input);
 
@@ -72,6 +80,11 @@ export class BillsService {
       narration: `${input.billType} payment for ${input.customerIdentifier}`,
       provider: provider.name,
       referencePrefix: 'bill',
+      metadata: {
+        billType: input.billType,
+        billerName: input.billerName,
+        network: input.network,
+      },
     });
 
     const billPayment = await this.prisma.billPayment.create({
@@ -195,12 +208,47 @@ export class BillsService {
     return this.nyraVas.listElectricityItems(billerId);
   }
 
-  validateTv(smartCardNumber: string, packageId: string) {
-    return this.nyraVas.validateTv(smartCardNumber, packageId);
+  private normalizeVasValidation(
+    data: NyraVasValidateTvResult | NyraVasValidateElectricityResult,
+    identifierLabel: string,
+  ) {
+    const record = data as Record<string, unknown>;
+    const customerName = [
+      data.customer_name,
+      record.customerName,
+      record.name,
+      record.account_name,
+      record.accountName,
+      data.customer_info,
+      record.customerInfo,
+    ]
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .find((value) => value.length > 0);
+
+    if (!customerName) {
+      throw new BadRequestException(`Could not resolve customer name for this ${identifierLabel}`);
+    }
+
+    return {
+      customerName,
+      customerInfo:
+        typeof data.customer_info === 'string' && data.customer_info.trim()
+          ? data.customer_info.trim()
+          : null,
+      outstanding: data.outstanding ?? null,
+      amount: data.amount ?? null,
+    };
   }
 
-  validateElectricity(meterNumber: string, packageId: string) {
-    return this.nyraVas.validateElectricity(meterNumber, packageId);
+  async validateTv(smartCardNumber: string, packageId: string) {
+    const data = await this.nyraVas.validateTv(smartCardNumber, packageId);
+    return this.normalizeVasValidation(data, 'smartcard number');
+  }
+
+  async validateElectricity(meterNumber: string, packageId: string) {
+    const data = await this.nyraVas.validateElectricity(meterNumber, packageId);
+    return this.normalizeVasValidation(data, 'meter number');
   }
 
   getTransactionStatus(transactionId: string) {

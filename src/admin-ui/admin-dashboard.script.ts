@@ -10,6 +10,8 @@ export function getAdminDashboardScript(apiBase: string): string {
   let usersPage = 1;
   let servicesPage = 1;
   let webhooksPage = 1;
+  let pushSelectedUsers = [];
+  let pushTemplates = [];
   let sidebarCollapsed = localStorage.getItem('boost_admin_sidebar') === 'collapsed';
   let dashboardPeriod = localStorage.getItem('boost_admin_period') || 'week';
   let dashboardStart = localStorage.getItem('boost_admin_range_start') || '';
@@ -26,6 +28,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     features: 'Feature Flags',
     pricing: 'Pricing & Rates',
     settings: 'App Settings',
+    push: 'Push Notifications',
     webhooks: 'Webhooks',
   };
 
@@ -40,6 +43,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     features: loadFeatures,
     pricing: loadPricing,
     settings: loadSettings,
+    push: loadPushNotifications,
     webhooks: loadWebhooks,
   };
 
@@ -75,6 +79,62 @@ export function getAdminDashboardScript(apiBase: string): string {
     return '<span class="badge ' + cls + '">' + String(status || '—') + '</span>';
   }
 
+  function issueBadge(issue) {
+    const label = String(issue || 'UNKNOWN').replace(/_/g, ' ');
+    const cls = issue === 'LOW_PROVIDER_BALANCE'
+      ? 'badge-rejected'
+      : issue === 'NOT_SUBMITTED'
+        ? 'badge-issue'
+        : 'badge-rejected';
+    return '<span class="badge ' + cls + '">' + label + '</span>';
+  }
+
+  function smmstoneMetricCard(smm) {
+    const low = !!smm.lowBalance;
+    const bal = smm.error ? '—' : usd(smm.balance);
+    const hint = smm.error
+      ? 'Balance unavailable'
+      : low
+        ? (smm.pendingDueToLowBalance || 0) + ' order' + ((smm.pendingDueToLowBalance || 0) === 1 ? '' : 's') + ' queued · top up SMMStone'
+        : 'Provider balance healthy';
+    return metricCard('SMMStone', bal, low ? 'provider danger' : 'provider', hint);
+  }
+
+  function updateAttentionBadge(count) {
+    const badge = $('attentionTabBadge');
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = String(count);
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  }
+
+  function renderAttentionBanner(count) {
+    const banner = $('attentionBanner');
+    if (!banner) return;
+    if (count > 0) {
+      const lowBalanceCount = window.__attentionLowBalanceCount || 0;
+      const lowBalanceNote = lowBalanceCount > 0
+        ? ' · ' + lowBalanceCount + ' queued because SMMStone balance is low'
+        : '';
+      banner.innerHTML = '<div class="attention-banner-inner"><div><strong>' + count + ' order' + (count === 1 ? '' : 's') + ' need attention</strong><div class="muted" style="margin-top:4px;font-size:.82rem">Paid-but-not-submitted, failed, or cancelled — refire, refund, or notify customers.' + lowBalanceNote + '</div></div><button class="btn btn-primary btn-sm" onclick="setOrdersTab(\\'attention\\')">Review now</button></div>';
+      show(banner);
+    } else {
+      banner.innerHTML = '';
+      hide(banner);
+    }
+  }
+
+  window.setOrdersTab = function(tab) {
+    orderTab = tab;
+    document.querySelectorAll('#orderTabs .tab').forEach((b) => {
+      b.classList.toggle('active', b.dataset.orderTab === tab);
+    });
+    setPage('orders');
+  };
+
   function fmtDate(d) {
     if (!d) return '—';
     return new Date(d).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' });
@@ -88,8 +148,12 @@ export function getAdminDashboardScript(apiBase: string): string {
     return '<div class="empty" style="color:var(--danger)">' + msg + '</div>';
   }
 
-  function metricCard(label, value, extraClass) {
-    return '<div class="metric-card' + (extraClass ? ' ' + extraClass : '') + '"><div class="label">' + label + '</div><div class="value">' + value + '</div></div>';
+  function metricCard(label, value, extraClass, hint) {
+    return '<div class="metric-card' + (extraClass ? ' ' + extraClass : '') + '">' +
+      '<div class="label">' + label + '</div>' +
+      '<div class="value">' + value + '</div>' +
+      (hint ? '<div class="hint">' + hint + '</div>' : '') +
+      '</div>';
   }
 
   function setPage(next) {
@@ -162,12 +226,19 @@ export function getAdminDashboardScript(apiBase: string): string {
     $('recentOrdersBody').innerHTML = '<div class="loading">Loading…</div>';
     $('platformHealthBody').innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const [analytics, stats, metrics, providers] = await Promise.all([
+      const [analytics, stats, metrics, providers, attentionRes] = await Promise.all([
         apiFetch('/admin/dashboard/analytics' + analyticsQuery()),
         apiFetch('/admin/dashboard/stats'),
         apiFetch('/admin/dashboard/metrics'),
         apiFetch('/admin/providers').catch(() => ({ data: {} })),
+        apiFetch('/admin/orders/attention').catch(() => ({ data: [] })),
       ]);
+
+      const attentionList = attentionRes.data || [];
+      const attentionCount = attentionList.length;
+      window.__attentionLowBalanceCount = attentionList.filter((o) => o.issue === 'LOW_PROVIDER_BALANCE').length;
+      updateAttentionBadge(attentionCount);
+      renderAttentionBanner(attentionCount);
 
       const a = analytics;
       const range = a.range || {};
@@ -186,14 +257,13 @@ export function getAdminDashboardScript(apiBase: string): string {
         $('periodLabel').textContent = 'Showing: ' + (range.label || dashboardPeriod);
       }
 
-      const smmBal = smm.error ? '—' : usd(smm.balance);
       const nyraSettled = nyraMaster.error ? '—' : money(nyraMaster.availableBalance);
       const nyraUnsettled = nyraMaster.error ? '—' : money(nyraMaster.unsettledBalance ?? 0);
 
       $('dashboardMetrics').innerHTML =
         metricCard('Nyra settled', nyraSettled, 'provider accent') +
         metricCard('Nyra unsettled', nyraUnsettled, 'provider') +
-        metricCard('SMMStone', smmBal, 'provider') +
+        smmstoneMetricCard(smm) +
         metricCard('User wallets', money(wallets.totalBalance), 'wallet') +
         metricCard('Users', String(users.total || 0)) +
         metricCard('Transactions', String(txns.walletTxCount || 0)) +
@@ -204,6 +274,7 @@ export function getAdminDashboardScript(apiBase: string): string {
         metricCard('Withdrawals', money(volume.withdrawals)) +
         metricCard('Gross volume', money(volume.grossVolume)) +
         metricCard('Open orders', String((orders.pending || 0) + (orders.processing || 0))) +
+        metricCard('Needs attention', String(attentionCount), attentionCount > 0 ? 'accent' : '') +
         metricCard('Services', String(stats.services || 0));
 
       $('volumeBreakdownBody').innerHTML = '<div class="health-grid">' +
@@ -261,6 +332,30 @@ export function getAdminDashboardScript(apiBase: string): string {
   }
 
   // ─── Orders ──────────────────────────────────────────────────
+  function renderAttentionRow(o) {
+    const customer = o.isGuest
+      ? '<div class="cell-title">Guest</div><div class="cell-sub">' + (o.userEmail || 'No email on file') + '</div>'
+      : '<div class="cell-title">' + (o.userEmail || 'Registered user') + '</div><div class="cell-sub">Account holder</div>';
+    const refundBtn = o.isGuest
+      ? ''
+      : '<button class="btn btn-danger btn-sm" onclick="refundAttentionOrder(\\'' + o.id + '\\')">Refund</button>';
+    const actions = '<div class="action-group">' +
+      '<button class="btn btn-success btn-sm" onclick="refireAttentionOrder(\\'' + o.id + '\\')">Refire</button>' +
+      refundBtn +
+      '<button class="btn btn-ghost btn-sm" onclick="openNotifyOrder(\\'' + o.id + '\\', \\'' + String(o.userEmail || '').replace(/'/g, '') + '\\')">Notify</button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="openAttentionOrder(\\'' + o.id + '\\')">Details</button>' +
+      '</div>';
+    return '<tr><td class="cell-title">' + shortId(o.id) + '</td>' +
+      '<td>' + customer + '</td>' +
+      '<td><div class="cell-title">' + (o.service || '—') + '</div><div class="cell-sub">' + (o.platform || '') + ' · ' + (o.quantity || 0) + ' qty</div></td>' +
+      '<td>' + money(o.price) + '</td>' +
+      '<td>' + issueBadge(o.issue) + '</td>' +
+      '<td>' + badge(o.status) + '</td>' +
+      '<td>' + badge(o.paymentStatus) + '</td>' +
+      '<td class="muted">' + fmtDate(o.updatedAt || o.createdAt) + '</td>' +
+      '<td>' + actions + '</td></tr>';
+  }
+
   function renderOrderRow(o, showActions) {
     const pricing = o.pricing || {};
     const user = o.user || {};
@@ -283,7 +378,19 @@ export function getAdminDashboardScript(apiBase: string): string {
     $('ordersTableWrap').innerHTML = '<div class="loading">Loading orders…</div>';
     try {
       let orders = [];
-      if (orderTab === 'all') {
+      if (orderTab === 'attention') {
+        const res = await apiFetch('/admin/orders/attention');
+        orders = res.data || [];
+        window.__attentionLowBalanceCount = orders.filter((o) => o.issue === 'LOW_PROVIDER_BALANCE').length;
+        updateAttentionBadge(orders.length);
+        renderAttentionBanner(orders.length);
+        $('ordersTableWrap').innerHTML = orders.length ? (
+          '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Service</th><th>Amount</th><th>Issue</th><th>Status</th><th>Payment</th><th>Updated</th><th>Actions</th></tr></thead><tbody>' +
+          orders.map((o) => renderAttentionRow(o)).join('') +
+          '</tbody></table></div><div class="pagination"><span class="muted">' + orders.length + ' order' + (orders.length === 1 ? '' : 's') + ' need attention</span></div>'
+        ) : '<div class="empty">No orders need attention right now</div>';
+        return;
+      } else if (orderTab === 'all') {
         const res = await apiFetch('/admin/orders');
         orders = res.orders || [];
       } else if (orderTab === 'pending') {
@@ -306,6 +413,84 @@ export function getAdminDashboardScript(apiBase: string): string {
       $('ordersTableWrap').innerHTML = errHtml(null, e.message);
     }
   }
+
+  window.openAttentionOrder = async function(id) {
+    try {
+      const res = await apiFetch('/admin/orders/attention');
+      const o = (res.data || []).find((x) => x.id === id);
+      if (!o) { toast('Order not found in attention list', true); return; }
+      const refundAction = o.isGuest
+        ? '<div class="muted" style="font-size:.82rem">Guest order — refund is unavailable. Use notify instead.</div>'
+        : '<button class="btn btn-danger btn-sm" onclick="refundAttentionOrder(\\'' + id + '\\')">Refund to wallet</button>';
+      const actions = '<div class="toolbar">' +
+        '<button class="btn btn-success btn-sm" onclick="refireAttentionOrder(\\'' + id + '\\')">Refire to SMMStone</button>' +
+        refundAction +
+        '<button class="btn btn-ghost btn-sm" onclick="openNotifyOrder(\\'' + id + '\\', \\'' + String(o.userEmail || '').replace(/'/g, '') + '\\')">Notify customer</button>' +
+        '</div>';
+      $('modal').innerHTML = '<div class="modal"><div class="modal-head"><h3>Attention · ' + shortId(id) + '</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button></div><div class="modal-body">' +
+        '<div class="detail-grid">' +
+        '<div><div class="field-label">Customer</div><div class="cell-title">' + (o.isGuest ? 'Guest' : 'Registered') + '</div><div class="cell-sub">' + (o.userEmail || '—') + '</div></div>' +
+        '<div><div class="field-label">Issue</div>' + issueBadge(o.issue) + '</div>' +
+        '<div><div class="field-label">Status</div>' + badge(o.status) + '</div>' +
+        '<div><div class="field-label">Payment</div>' + badge(o.paymentStatus) + '</div>' +
+        '<div><div class="field-label">Service</div><div>' + (o.service || '—') + '</div></div>' +
+        '<div><div class="field-label">Platform</div><div>' + (o.platform || '—') + '</div></div>' +
+        '<div><div class="field-label">Quantity</div><div>' + (o.quantity || '—') + '</div></div>' +
+        '<div><div class="field-label">Amount</div><div>' + money(o.price) + '</div></div>' +
+        '<div class="full"><div class="field-label">Social URL</div><div style="word-break:break-all">' + (o.link || '—') + '</div></div>' +
+        '<div><div class="field-label">Provider ref</div><div class="muted">' + (o.providerOrderId || 'Not submitted') + '</div></div>' +
+        '<div><div class="field-label">Updated</div><div class="muted">' + fmtDate(o.updatedAt || o.createdAt) + '</div></div>' +
+        '</div>' + actions + '</div></div>';
+      show($('modal'));
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.refireAttentionOrder = async function(id) {
+    if (!confirm('Re-submit this order to SMMStone?')) return;
+    try {
+      const res = await apiFetch('/admin/orders/' + id + '/refire', { method: 'POST' });
+      toast('Order refired' + (res.data?.providerOrderId ? ' · ref ' + res.data.providerOrderId : ''));
+      closeModal();
+      loadOrders();
+      if (page === 'dashboard') loadDashboard();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.refundAttentionOrder = async function(id) {
+    if (!confirm('Refund this order amount back to the user wallet?')) return;
+    try {
+      const res = await apiFetch('/admin/orders/' + id + '/refund', { method: 'POST' });
+      toast('Refunded ' + money(res.data?.amount || 0) + ' · ' + (res.data?.reference || ''));
+      closeModal();
+      loadOrders();
+      if (page === 'dashboard') loadDashboard();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.openNotifyOrder = function(id, defaultEmail) {
+    $('modal').innerHTML = '<div class="modal"><div class="modal-head"><h3>Notify customer · ' + shortId(id) + '</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button></div><div class="modal-body">' +
+      '<label class="field-label" for="notifyEmail">Email</label>' +
+      '<input class="input" id="notifyEmail" type="email" placeholder="customer@example.com" value="' + String(defaultEmail || '').replace(/"/g, '&quot;') + '" />' +
+      '<label class="field-label" for="notifyMessage" style="margin-top:14px">Message (optional)</label>' +
+      '<textarea class="input" id="notifyMessage" rows="5" placeholder="Leave blank to send the default BoostLab update email."></textarea>' +
+      '<div class="toolbar" style="margin-top:16px">' +
+      '<button class="btn btn-primary btn-sm" onclick="sendNotifyOrder(\\'' + id + '\\')">Send email</button>' +
+      '</div></div></div>';
+    show($('modal'));
+  };
+
+  window.sendNotifyOrder = async function(id) {
+    const email = ($('notifyEmail') || {}).value || '';
+    const message = ($('notifyMessage') || {}).value || '';
+    try {
+      const res = await apiFetch('/admin/orders/' + id + '/notify', {
+        method: 'POST',
+        body: JSON.stringify({ email: email || undefined, message: message || undefined }),
+      });
+      toast('Email sent to ' + (res.data?.to || email));
+      closeModal();
+    } catch (e) { toast(e.message, true); }
+  };
 
   window.openOrder = async function(id) {
     try {
@@ -400,10 +585,16 @@ export function getAdminDashboardScript(apiBase: string): string {
       ]);
       const bal = balance.data || {};
       const nyra = nyraWallet.data || {};
+      const smmMetric = {
+        balance: bal.balance,
+        lowBalance: !!bal.lowBalance,
+        pendingDueToLowBalance: bal.pendingDueToLowBalance || 0,
+        error: balance.success === false ? (balance.error || 'Unavailable') : null,
+      };
       $('integrationMetrics').innerHTML =
         metricCard('Nyra settled', nyraWallet.success === false ? '—' : money(nyra.available_balance), 'accent') +
         metricCard('Nyra unsettled', nyraWallet.success === false ? '—' : money(nyra.unsettled_balance), 'provider') +
-        metricCard('SMMStone', '$' + (bal.balance ?? '—'), 'provider') +
+        smmstoneMetricCard(smmMetric) +
         metricCard('Services', String(stats.services || 0)) +
         metricCard('Categories', String(stats.categories || 0)) +
         metricCard('Orders', String(stats.orders || 0));
@@ -421,7 +612,13 @@ export function getAdminDashboardScript(apiBase: string): string {
           '<pre class="json" style="margin-top:14px">' + JSON.stringify(nyra, null, 2) + '</pre>';
       if ($('refreshNyraBtn')) $('refreshNyraBtn').onclick = () => loadIntegrations();
 
-      $('smmstoneBody').innerHTML = '<p class="muted" style="margin-bottom:14px">Sync services from SMMStone and check provider balance.</p>' +
+      $('smmstoneBody').innerHTML =
+        (bal.lowBalance
+          ? '<div class="attention-banner" style="margin-bottom:14px"><div class="attention-banner-inner"><div><strong>SMMStone balance is low</strong><div class="muted" style="margin-top:4px;font-size:.82rem">' +
+            (bal.pendingDueToLowBalance || 0) + ' paid order' + ((bal.pendingDueToLowBalance || 0) === 1 ? '' : 's') +
+            ' waiting to be submitted. Top up SMMStone, then refire from Orders → Needs attention.</div></div></div></div>'
+          : '') +
+        '<p class="muted" style="margin-bottom:14px">Sync services from SMMStone and check provider balance.</p>' +
         '<div class="toolbar"><button class="btn btn-primary btn-sm" id="syncSmmstoneBtn">Sync services</button><button class="btn btn-ghost btn-sm" id="refreshBalanceBtn">Refresh balance</button></div>' +
         '<pre class="json" style="margin-top:14px">' + JSON.stringify(bal, null, 2) + '</pre>';
       $('syncSmmstoneBtn').onclick = async () => {
@@ -437,7 +634,7 @@ export function getAdminDashboardScript(apiBase: string): string {
 
       const rates = stats.rates || {};
       $('systemStatsBody').innerHTML = '<div class="health-grid">' +
-        '<div class="health-item"><span>Markup</span><strong>' + (rates.markupPercentage || 30) + '%</strong></div>' +
+        '<div class="health-item"><span>Markup</span><strong>' + (rates.markupPercentage || 10) + '%</strong></div>' +
         '<div class="health-item"><span>USDT rate</span><strong>₦' + (rates.usdtExchangeRate || 1500) + '</strong></div>' +
         '<div class="health-item"><span>Platforms</span><strong>' + (stats.platforms || 0) + '</strong></div>' +
         '<div class="health-item"><span>Categories</span><strong>' + (stats.categories || 0) + '</strong></div>' +
@@ -723,6 +920,224 @@ export function getAdminDashboardScript(apiBase: string): string {
     }
   }
 
+  // ─── Push notifications ──────────────────────────────────────
+  async function loadPushNotifications() {
+    $('pushComposeBody').innerHTML = '<div class="loading">Loading push composer…</div>';
+    $('pushTemplatesBody').innerHTML = '<div class="loading">Loading templates…</div>';
+    try {
+      const templatesRes = await apiFetch('/admin/notifications/templates');
+      pushTemplates = templatesRes.data || [];
+      renderPushTemplates();
+      renderPushComposer();
+      await refreshPushPreview();
+    } catch (e) {
+      $('pushComposeBody').innerHTML = errHtml(null, e.message);
+      $('pushTemplatesBody').innerHTML = errHtml(null, e.message);
+    }
+  }
+
+  function renderPushTemplates() {
+    $('pushTemplatesBody').innerHTML =
+      '<div class="template-chips">' +
+      pushTemplates.map((t) =>
+        '<button type="button" class="template-chip" data-template="' + t.key + '">' + t.label + '</button>'
+      ).join('') +
+      '</div>' +
+      '<p class="muted" style="margin-top:16px;font-size:.82rem">Templates only fill title and message — choose your audience before sending.</p>';
+    $('pushTemplatesBody').querySelectorAll('[data-template]').forEach((btn) => {
+      btn.onclick = () => {
+        const tpl = pushTemplates.find((t) => t.key === btn.getAttribute('data-template'));
+        if (!tpl) return;
+        $('pushTitleInput').value = tpl.title;
+        $('pushBodyInput').value = tpl.body;
+        $('pushTypeInput').value = tpl.type;
+        $('pushTemplateKeyInput').value = tpl.key;
+        toast('Template applied');
+      };
+    });
+  }
+
+  function renderSelectedUsers() {
+    const wrap = $('pushSelectedUsers');
+    if (!wrap) return;
+    if (!pushSelectedUsers.length) {
+      wrap.innerHTML = '<p class="muted" style="font-size:.82rem">No users selected yet.</p>';
+      return;
+    }
+    wrap.innerHTML = pushSelectedUsers.map((u) =>
+      '<span class="selected-user-tag">' + (u.email || u.username || u.id) +
+      ' <button type="button" data-remove-user="' + u.id + '" style="background:none;border:none;color:inherit;cursor:pointer">×</button></span>'
+    ).join('');
+    wrap.querySelectorAll('[data-remove-user]').forEach((btn) => {
+      btn.onclick = () => {
+        const id = btn.getAttribute('data-remove-user');
+        pushSelectedUsers = pushSelectedUsers.filter((u) => u.id !== id);
+        renderSelectedUsers();
+        refreshPushPreview();
+      };
+    });
+  }
+
+  async function searchPushUsers() {
+    const q = ($('pushUserSearchInput') || {}).value || '';
+    const wrap = $('pushUserSearchResults');
+    if (!wrap) return;
+    if (!q.trim()) {
+      wrap.innerHTML = '';
+      return;
+    }
+    wrap.innerHTML = '<div class="loading">Searching…</div>';
+    try {
+      const res = await apiFetch('/admin/users?search=' + encodeURIComponent(q.trim()) + '&limit=8');
+      const users = res.users || [];
+      if (!users.length) {
+        wrap.innerHTML = '<p class="muted" style="padding:10px;font-size:.82rem">No users found.</p>';
+        return;
+      }
+      wrap.innerHTML = '<div class="user-pick-list">' + users.map((u) =>
+        '<label class="user-pick-item"><input type="checkbox" data-user-id="' + u.id + '" data-user-email="' + (u.email || '') + '" data-user-username="' + (u.username || '') + '" ' +
+        (pushSelectedUsers.some((s) => s.id === u.id) ? 'checked' : '') + ' />' +
+        '<span>' + (u.email || u.username || u.id) + '</span></label>'
+      ).join('') + '</div>';
+      wrap.querySelectorAll('input[data-user-id]').forEach((input) => {
+        input.onchange = () => {
+          const id = input.getAttribute('data-user-id');
+          if (input.checked) {
+            if (!pushSelectedUsers.some((u) => u.id === id)) {
+              pushSelectedUsers.push({
+                id,
+                email: input.getAttribute('data-user-email'),
+                username: input.getAttribute('data-user-username'),
+              });
+            }
+          } else {
+            pushSelectedUsers = pushSelectedUsers.filter((u) => u.id !== id);
+          }
+          renderSelectedUsers();
+          refreshPushPreview();
+        };
+      });
+    } catch (e) {
+      wrap.innerHTML = errHtml(null, e.message);
+    }
+  }
+
+  async function refreshPushPreview() {
+    const audience = ($('pushAudienceInput') || {}).value || 'all';
+    const preview = $('pushAudiencePreview');
+    if (!preview) return;
+    preview.innerHTML = '<span class="muted">Calculating audience…</span>';
+    try {
+      let qs = '?audience=' + encodeURIComponent(audience);
+      if (audience === 'individuals' && pushSelectedUsers.length) {
+        pushSelectedUsers.forEach((u) => { qs += '&userIds=' + encodeURIComponent(u.id); });
+      }
+      const res = await apiFetch('/admin/notifications/audience-preview' + qs);
+      const d = res.data || {};
+      preview.innerHTML =
+        '<strong>Audience preview</strong><br>' +
+        '<span class="muted">' + d.userCount + ' users · ' + d.deviceCount + ' devices' +
+        (d.guestDeviceCount ? ' · ' + d.guestDeviceCount + ' guest devices' : '') + '</span>';
+    } catch (e) {
+      preview.innerHTML = errHtml(null, e.message);
+    }
+  }
+
+  function renderPushComposer() {
+    $('pushComposeBody').innerHTML =
+      '<label class="field-label">Audience</label>' +
+      '<select class="select" id="pushAudienceInput">' +
+      '<option value="all">All users (every active device)</option>' +
+      '<option value="individuals">Selected individuals</option>' +
+      '<option value="verified_users">Verified users only</option>' +
+      '<option value="unverified_users">Unverified users only</option>' +
+      '<option value="ios_only">iOS users only</option>' +
+      '<option value="android_only">Android users only</option>' +
+      '<option value="active_30d">Active in last 30 days</option>' +
+      '<option value="with_orders">Users with at least one order</option>' +
+      '<option value="guest_devices">Guest devices only</option>' +
+      '</select>' +
+      '<div id="pushIndividualsWrap" class="hidden" style="margin-top:14px">' +
+      '<label class="field-label">Find users</label>' +
+      '<input class="input" id="pushUserSearchInput" placeholder="Search by email or username" />' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="pushUserSearchBtn" style="margin-top:8px">Search users</button>' +
+      '<div id="pushUserSearchResults"></div>' +
+      '<div id="pushSelectedUsers"></div>' +
+      '</div>' +
+      '<div class="push-preview" id="pushAudiencePreview"></div>' +
+      '<label class="field-label">Title</label>' +
+      '<input class="input" id="pushTitleInput" maxlength="120" placeholder="Notification title" />' +
+      '<label class="field-label">Message</label>' +
+      '<textarea class="input" id="pushBodyInput" rows="4" maxlength="500" placeholder="Notification message"></textarea>' +
+      '<label class="field-label">Type</label>' +
+      '<select class="select" id="pushTypeInput">' +
+      '<option value="PROMOTIONAL">Promotional</option>' +
+      '<option value="SYSTEM_ALERT">System alert</option>' +
+      '<option value="SECURITY">Security</option>' +
+      '<option value="ORDER_UPDATE">Order update</option>' +
+      '<option value="PAYMENT_UPDATE">Payment / wallet</option>' +
+      '</select>' +
+      '<input type="hidden" id="pushTemplateKeyInput" value="" />' +
+      '<label class="field-label">Click action (optional)</label>' +
+      '<input class="input" id="pushClickActionInput" placeholder="e.g. wallet, orders, boost" />' +
+      '<div class="toolbar" style="margin-top:16px">' +
+      '<button class="btn btn-primary" id="sendPushBtn">Send push notification</button>' +
+      '<button class="btn btn-ghost btn-sm" id="refreshPushPreviewBtn">Refresh audience</button>' +
+      '</div>';
+
+    const audienceInput = $('pushAudienceInput');
+    const individualsWrap = $('pushIndividualsWrap');
+    const toggleIndividuals = () => {
+      if (audienceInput.value === 'individuals') show(individualsWrap);
+      else hide(individualsWrap);
+      refreshPushPreview();
+    };
+    audienceInput.onchange = toggleIndividuals;
+    toggleIndividuals();
+    renderSelectedUsers();
+
+    $('pushUserSearchBtn').onclick = searchPushUsers;
+    $('pushUserSearchInput').onkeydown = (e) => { if (e.key === 'Enter') searchPushUsers(); };
+    $('refreshPushPreviewBtn').onclick = refreshPushPreview;
+
+    $('sendPushBtn').onclick = async () => {
+      const audience = audienceInput.value;
+      const title = $('pushTitleInput').value.trim();
+      const body = $('pushBodyInput').value.trim();
+      const type = $('pushTypeInput').value;
+      const templateKey = $('pushTemplateKeyInput').value || undefined;
+      const clickAction = $('pushClickActionInput').value.trim() || undefined;
+      if (!title || !body) {
+        toast('Title and message are required', true);
+        return;
+      }
+      if (audience === 'individuals' && !pushSelectedUsers.length) {
+        toast('Select at least one user for individual sends', true);
+        return;
+      }
+      if (!confirm('Send this push notification now?')) return;
+      try {
+        const payload = {
+          audience,
+          title,
+          body,
+          type,
+          templateKey,
+          clickAction,
+          userIds: audience === 'individuals' ? pushSelectedUsers.map((u) => u.id) : undefined,
+        };
+        const res = await apiFetch('/admin/notifications/send', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        const d = res.data || {};
+        toast(d.message || ('Sent to ' + (d.sentCount || 0) + ' devices'));
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+  }
+
   // ─── App settings ────────────────────────────────────────────
   async function loadSettings() {
     $('settingsBody').innerHTML = '<div class="loading">Loading settings…</div>';
@@ -730,6 +1145,9 @@ export function getAdminDashboardScript(apiBase: string): string {
       const res = await apiFetch('/admin/app-settings');
       const s = res.data || {};
       $('settingsBody').innerHTML =
+        '<label class="field-label">SMM web flow URL</label>' +
+        '<p class="muted" style="font-size:.82rem;margin-bottom:8px">Opened when users tap &ldquo;Boost your socials&rdquo; in the app (production). Dev builds keep using the local Vite server.</p>' +
+        '<input class="input" id="smmWebUrlInput" value="' + (s.smmWebUrl || '') + '" placeholder="https://boostlab.ng/boost" />' +
         '<label class="field-label">WhatsApp support line</label>' +
         '<input class="input" id="whatsappInput" value="' + (s.whatsappSupportLine || '') + '" placeholder="+234… or wa.me link" />' +
         '<label class="field-label">Help &amp; support URL</label>' +
@@ -743,6 +1161,7 @@ export function getAdminDashboardScript(apiBase: string): string {
           await apiFetch('/admin/app-settings', {
             method: 'PATCH',
             body: JSON.stringify({
+              smmWebUrl: $('smmWebUrlInput').value,
               whatsappSupportLine: $('whatsappInput').value,
               helpSupportUrl: $('helpUrlInput').value,
               aboutPageUrl: $('aboutUrlInput').value,

@@ -1,10 +1,11 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface AppSettingsLinks {
   whatsappSupportLine: string | null;
   helpSupportUrl: string | null;
   aboutPageUrl: string | null;
+  smmWebUrl: string | null;
   fundingFee: number;
   withdrawalFee: number;
 }
@@ -18,10 +19,14 @@ export interface UpdateAppSettingsInput {
   whatsappSupportLine?: string | null;
   helpSupportUrl?: string | null;
   aboutPageUrl?: string | null;
+  smmWebUrl?: string | null;
   fundingFee?: number;
   withdrawalFee?: number;
+  smmMarkupPercent?: number;
   updatedBy?: string;
 }
+
+export const DEFAULT_SMM_MARKUP_PERCENT = 10;
 
 @Injectable()
 export class AppSettingsService implements OnModuleInit {
@@ -52,6 +57,13 @@ export class AppSettingsService implements OnModuleInit {
     };
   }
 
+  /** Live SMM markup percentage applied to provider prices (default 10%). */
+  async getSmmMarkupPercent(): Promise<number> {
+    const settings = await this.getOrCreate();
+    const value = this.toNumber(settings.smmMarkupPercent);
+    return value > 0 ? value : DEFAULT_SMM_MARKUP_PERCENT;
+  }
+
   async getSettings() {
     return this.getOrCreate();
   }
@@ -67,11 +79,22 @@ export class AppSettingsService implements OnModuleInit {
     if (input.aboutPageUrl !== undefined) {
       data.aboutPageUrl = input.aboutPageUrl?.trim() || null;
     }
+    if (input.smmWebUrl !== undefined) {
+      const trimmed = input.smmWebUrl?.trim() || null;
+      if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+        throw new BadRequestException('SMM web URL must start with http:// or https://');
+      }
+      data.smmWebUrl = trimmed;
+    }
     if (input.fundingFee !== undefined) {
       data.fundingFee = Math.max(0, input.fundingFee);
     }
     if (input.withdrawalFee !== undefined) {
       data.withdrawalFee = Math.max(0, input.withdrawalFee);
+    }
+    if (input.smmMarkupPercent !== undefined) {
+      // Clamp to a sane range so a fat-fingered admin can't zero out margins
+      data.smmMarkupPercent = Math.min(1000, Math.max(0, input.smmMarkupPercent));
     }
     if (input.updatedBy !== undefined) {
       data.updatedBy = input.updatedBy;
@@ -106,6 +129,7 @@ export class AppSettingsService implements OnModuleInit {
     whatsappSupportLine: string | null;
     helpSupportUrl: string | null;
     aboutPageUrl: string | null;
+    smmWebUrl: string | null;
     fundingFee: { toString(): string };
     withdrawalFee: { toString(): string };
   }): AppSettingsLinks {
@@ -113,6 +137,7 @@ export class AppSettingsService implements OnModuleInit {
       whatsappSupportLine: settings.whatsappSupportLine,
       helpSupportUrl: settings.helpSupportUrl,
       aboutPageUrl: settings.aboutPageUrl,
+      smmWebUrl: settings.smmWebUrl,
       fundingFee: this.toNumber(settings.fundingFee),
       withdrawalFee: this.toNumber(settings.withdrawalFee),
     };

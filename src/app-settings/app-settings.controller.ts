@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Patch, Request, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AppSettingsService } from './app-settings.service';
 
@@ -20,6 +20,11 @@ class UpdateAppSettingsDto {
   @IsString()
   aboutPageUrl?: string;
 
+  @ApiPropertyOptional({ example: 'https://boostlab.ng/boost', description: 'Hosted SMM web flow URL opened by the mobile app' })
+  @IsOptional()
+  @IsString()
+  smmWebUrl?: string;
+
   @ApiPropertyOptional({ example: 50, description: 'Flat NGN fee deducted when wallet funding is confirmed' })
   @IsOptional()
   @IsNumber()
@@ -31,6 +36,13 @@ class UpdateAppSettingsDto {
   @IsNumber()
   @Min(0)
   withdrawalFee?: number;
+
+  @ApiPropertyOptional({ example: 10, description: 'Markup % applied to SMMStone provider prices' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1000)
+  smmMarkupPercent?: number;
 }
 
 @ApiTags('app')
@@ -40,7 +52,7 @@ export class AppSettingsController {
 
   @Get('settings')
   @ApiOperation({
-    summary: 'Get public app settings (support links, wallet fees)',
+    summary: 'Get public app settings (support links, SMM web URL, wallet fees)',
   })
   async getPublicSettings() {
     const data = await this.appSettingsService.getPublicSettings();
@@ -62,7 +74,7 @@ export class AdminAppSettingsController {
   }
 
   @Patch()
-  @ApiOperation({ summary: 'Update support links, wallet funding fee, and withdrawal fee' })
+  @ApiOperation({ summary: 'Update support links, SMM web URL, wallet fees, and markup' })
   async updateSettings(@Request() req, @Body() dto: UpdateAppSettingsDto) {
     const data = await this.appSettingsService.updateSettings({
       ...dto,

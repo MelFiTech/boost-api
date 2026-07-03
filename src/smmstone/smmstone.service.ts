@@ -1,6 +1,12 @@
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationService } from '../services/notification.service';
+import {
+  isSmmstoneLowBalance,
+  parseSmmstoneBalance,
+} from './smmstone-balance.util';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import axios from 'axios';
 
@@ -43,6 +49,7 @@ export class SmmstoneService {
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService,
   ) {
     this.apiUrl = this.configService.get<string>('SMMSTONE_API_URL') || 'https://smmstone.com/api/v2';
     this.apiKey = this.configService.get<string>('SMMSTONE_API_KEY');
@@ -112,6 +119,23 @@ export class SmmstoneService {
       this.logger.error('Failed to get balance:', error);
       throw error;
     }
+  }
+
+  async getBalanceStatus(threshold = 10) {
+    const raw = await this.getBalance();
+    const balance = parseSmmstoneBalance(raw);
+    const currency =
+      typeof raw === 'object' && raw && 'currency' in raw
+        ? String((raw as { currency?: string }).currency || 'USD')
+        : 'USD';
+
+    return {
+      balance,
+      currency,
+      lowBalance: isSmmstoneLowBalance(balance, threshold),
+      threshold,
+      raw,
+    };
   }
 
   /**
@@ -380,6 +404,7 @@ export class SmmstoneService {
             update: {
               name: service.name,
               type: service.type,
+              providerCategory: service.category || null,
               providerRate: parseFloat(service.rate),
               boostRate: parseFloat(service.rate) * 1.3, // Apply 30% markup
               minOrder: parseInt(service.min),
@@ -396,6 +421,7 @@ export class SmmstoneService {
               categoryId: category.id,
               name: service.name,
               type: service.type,
+              providerCategory: service.category || null,
               providerRate: parseFloat(service.rate),
               boostRate: parseFloat(service.rate) * 1.3, // Apply 30% markup
               minOrder: parseInt(service.min),
@@ -593,24 +619,28 @@ export class SmmstoneService {
         // Send notification to user if status changed significantly
         if (order.user && shouldNotify && notificationMessage) {
           try {
-            // Create a simple notification record in the database
-            await this.prisma.userNotification.create({
-              data: {
-                userId: order.user.id,
-                type: 'ORDER_UPDATE',
+            const typeMap = {
+              COMPLETED: 'order_completed' as const,
+              CANCELLED: 'order_rejected' as const,
+              FAILED: 'order_rejected' as const,
+              PROCESSING: 'order_approved' as const,
+            };
+            const notifyType = typeMap[newStatus as keyof typeof typeMap];
+            if (notifyType) {
+              await this.notificationService.sendOrderNotification(order.id, notifyType);
+            } else {
+              await this.notificationService.sendNotification({
                 title: 'Order Status Update',
                 body: notificationMessage,
-                data: { 
-                  orderId: order.id, 
-                  status: newStatus,
-                  smmstoneData: statusData
-                }
-              }
-            });
-
-            this.logger.log(`Created notification for user ${order.user.id} for order ${order.id}`);
+                type: NotificationType.ORDER_UPDATE,
+                userIds: [order.user.id],
+                orderId: order.id,
+                data: { orderId: order.id, status: newStatus, type: 'order_update' },
+              });
+            }
+            this.logger.log(`Sent push notification for order ${order.id}`);
           } catch (notificationError) {
-            this.logger.error(`Failed to create notification for order ${order.id}:`, notificationError);
+            this.logger.error(`Failed to send notification for order ${order.id}:`, notificationError);
           }
         }
       }
