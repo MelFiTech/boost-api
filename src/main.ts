@@ -44,6 +44,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1', {
     exclude: [
       { path: '', method: RequestMethod.GET },
+      { path: 'health', method: RequestMethod.GET },
       { path: 'admin', method: RequestMethod.GET },
       { path: 'admin/assets/logo.png', method: RequestMethod.GET },
     ],
