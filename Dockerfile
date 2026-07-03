@@ -1,5 +1,5 @@
-# Use Node.js 18 Alpine for smaller image size
-FROM node:18-alpine AS base
+# Use Node.js 20 Alpine (matches package.json engines; Node 18 lacks global crypto)
+FROM node:20-alpine AS base
 
 # Install dependencies needed for native modules
 RUN apk add --no-cache libc6-compat openssl
@@ -23,10 +23,10 @@ RUN npx prisma generate
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine AS production
+FROM node:20-alpine AS production
 
-# Install dependencies needed for runtime
-RUN apk add --no-cache openssl curl
+# Install dependencies needed for runtime (libc6-compat required by Prisma engines)
+RUN apk add --no-cache libc6-compat openssl curl
 
 # Create app directory
 WORKDIR /app
@@ -57,5 +57,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
-# Start the application
-CMD ["node", "dist/main"]
+# Run pending database migrations, then start the application
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
