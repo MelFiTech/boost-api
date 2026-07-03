@@ -8,20 +8,19 @@ RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 
 # Copy package manager files
-COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn ./.yarn
+COPY package.json package-lock.json ./
 
 # Install dependencies
-RUN yarn install --frozen-lockfile
+RUN npm ci
 
 # Copy source code
 COPY . .
 
 # Generate Prisma client
-RUN yarn prisma generate
+RUN npx prisma generate
 
 # Build the application
-RUN yarn build
+RUN npm run build
 
 # Production stage
 FROM node:18-alpine AS production
@@ -37,11 +36,10 @@ RUN addgroup -g 1001 -S nodejs
 RUN adduser -S nestjs -u 1001
 
 # Copy package manager files
-COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn ./.yarn
+COPY package.json package-lock.json ./
 
 # Install only production dependencies
-RUN yarn install --frozen-lockfile --production
+RUN npm ci --omit=dev
 
 # Copy built application
 COPY --from=base /app/dist ./dist
@@ -60,4 +58,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
 # Start the application
-CMD ["node", "dist/main"] 
+CMD ["node", "dist/main"]

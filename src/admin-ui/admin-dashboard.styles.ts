@@ -153,19 +153,20 @@ button, input, textarea, select { font: inherit; }
   padding: 10px 14px;
   min-height: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
 }
 .metric-card .label {
   color: var(--muted); font-size: 0.68rem; text-transform: uppercase;
   letter-spacing: .06em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  flex: 1; min-width: 0;
+  width: 100%;
 }
 .metric-card .value {
-  font-size: 1.28rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1;
-  text-align: right; white-space: nowrap; flex-shrink: 0;
+  font-size: 1.32rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1;
+  white-space: nowrap; width: 100%;
 }
 .metric-card .sub { display: none; }
 .metric-card.accent { border-color: rgba(217,255,2,.25); background: linear-gradient(90deg, rgba(217,255,2,.06), var(--panel)); }
