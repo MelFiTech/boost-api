@@ -7,6 +7,7 @@ import { GeminiService } from '../services/gemini.service';
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly DEV_OTP = '123456';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -60,7 +61,7 @@ export class AuthService {
         throw new UnauthorizedException('Invalid email format');
       }
 
-      const otp = this.generateOTP();
+      const otp = process.env.NODE_ENV === 'development' ? this.DEV_OTP : this.generateOTP();
       const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
 
       // Check if user exists
@@ -96,22 +97,26 @@ export class AuthService {
         },
       });
 
-      // Send OTP email
-      const emailResult = await this.resendService.sendOtpEmail({
-        email,
-        otp,
-        userName: user.username || undefined,
-      });
+      // Send OTP email (skipped in development — use fixed OTP 123456)
+      if (process.env.NODE_ENV !== 'development') {
+        const emailResult = await this.resendService.sendOtpEmail({
+          email,
+          otp,
+          userName: user.username || undefined,
+        });
 
-      if (!emailResult.success) {
-        this.logger.error(`Failed to send OTP email to ${email}: ${emailResult.error}`);
-        throw new UnauthorizedException('Failed to send OTP email');
+        if (!emailResult.success) {
+          this.logger.error(`Failed to send OTP email to ${email}: ${emailResult.error}`);
+          throw new UnauthorizedException('Failed to send OTP email');
+        }
+
+        this.logger.log(`OTP sent successfully to ${email}. Message ID: ${emailResult.messageId}`);
+      } else {
+        this.logger.warn(`Development mode: OTP for ${email} is ${this.DEV_OTP} (email not sent)`);
       }
 
-      this.logger.log(`OTP sent successfully to ${email}. Message ID: ${emailResult.messageId}`);
-
       // If it's a new user, send welcome email after successful OTP send
-      if (isNewUser) {
+      if (isNewUser && process.env.NODE_ENV !== 'development') {
         try {
           await this.resendService.sendWelcomeEmail({
             email,
@@ -148,16 +153,21 @@ export class AuthService {
         throw new UnauthorizedException('User not found');
       }
 
-      if (!user.otp || !user.otpExpiry) {
-        throw new UnauthorizedException('No OTP requested');
-      }
+      const isDevOtp =
+        process.env.NODE_ENV === 'development' && otp === this.DEV_OTP;
 
-      if (user.otpExpiry < new Date()) {
-        throw new UnauthorizedException('OTP expired');
-      }
+      if (!isDevOtp) {
+        if (!user.otp || !user.otpExpiry) {
+          throw new UnauthorizedException('No OTP requested');
+        }
 
-      if (user.otp !== otp) {
-        throw new UnauthorizedException('Invalid OTP');
+        if (user.otpExpiry < new Date()) {
+          throw new UnauthorizedException('OTP expired');
+        }
+
+        if (user.otp !== otp) {
+          throw new UnauthorizedException('Invalid OTP');
+        }
       }
 
       // Clear OTP and mark as verified

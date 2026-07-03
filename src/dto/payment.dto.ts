@@ -1,9 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNumber, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsOptional } from 'class-validator';
 
 export enum PaymentProvider {
-  BUDPAY = 'budpay',
-  CRYPTO = 'crypto'
+  NYRA = 'nyra',
+  CRYPTO = 'crypto',
 }
 
 export class InitiatePaymentDto {
@@ -11,33 +11,33 @@ export class InitiatePaymentDto {
   @IsString()
   orderId: string;
 
-  @ApiProperty({ 
-    enum: PaymentProvider, 
-    example: PaymentProvider.BUDPAY,
-    description: 'Payment provider to use'
+  @ApiProperty({
+    enum: PaymentProvider,
+    example: PaymentProvider.NYRA,
+    description: 'Payment provider to use',
   })
   @IsEnum(PaymentProvider)
   provider: PaymentProvider;
 
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     example: 'boostlab@gmail.com',
-    description: 'Customer email for BudPay payments'
+    description: 'Customer email for bank transfer payments',
   })
   @IsOptional()
   @IsString()
   email?: string;
 
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     example: '+2348123456789',
-    description: 'Customer phone number'
+    description: 'Customer phone number',
   })
   @IsOptional()
   @IsString()
   phone?: string;
 
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     example: 'Boost Buddy',
-    description: 'Customer name'
+    description: 'Customer name',
   })
   @IsOptional()
   @IsString()
@@ -45,14 +45,14 @@ export class InitiatePaymentDto {
 }
 
 export class VerifyPaymentDto {
-  @ApiProperty({ example: 'boost_orderid_timestamp', description: 'Payment reference from provider' })
+  @ApiProperty({ example: 'paya1b2c3d4e5f6789012345678', description: 'Payment reference from provider' })
   @IsString()
   reference: string;
 
-  @ApiPropertyOptional({ 
-    enum: PaymentProvider, 
-    example: PaymentProvider.BUDPAY,
-    description: 'Payment provider used (optional - will be inferred from reference if not provided)'
+  @ApiPropertyOptional({
+    enum: PaymentProvider,
+    example: PaymentProvider.NYRA,
+    description: 'Payment provider used (optional — inferred from payment method if omitted)',
   })
   @IsOptional()
   @IsEnum(PaymentProvider)
@@ -75,4 +75,4 @@ export class CryptoPaymentDto {
   @ApiProperty({ example: 'USDT', description: 'Cryptocurrency type' })
   @IsString()
   currency: string;
-} 
+}

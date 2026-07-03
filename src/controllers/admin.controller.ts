@@ -8,6 +8,7 @@ import { OrdersService } from '../services/orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SmmstoneService } from '../smmstone/smmstone.service';
 import { NotificationService } from '../services/notification.service';
+import { AdminDashboardService, DashboardPeriod } from '../services/admin-dashboard.service';
 
 class UpdateRatesDto {
   @IsOptional()
@@ -41,7 +42,8 @@ export class AdminController {
     private readonly prisma: PrismaService,
     private readonly ordersService: OrdersService,
     private readonly smmstoneService: SmmstoneService,
-    private readonly notificationService: NotificationService
+    private readonly notificationService: NotificationService,
+    private readonly adminDashboardService: AdminDashboardService,
   ) {}
 
   @Get('rates')
@@ -169,6 +171,19 @@ export class AdminController {
       newMarkupPercentage: markupPercentage,
       newExchangeRate: exchangeRate
     };
+  }
+
+  @Get('dashboard/analytics')
+  @ApiOperation({ summary: 'Get extended dashboard analytics with date range filters' })
+  @ApiQuery({ name: 'period', required: false, enum: ['today', 'week', 'month', 'all', 'custom'] })
+  @ApiQuery({ name: 'startDate', required: false, description: 'YYYY-MM-DD (for custom period)' })
+  @ApiQuery({ name: 'endDate', required: false, description: 'YYYY-MM-DD (for custom period)' })
+  async getDashboardAnalytics(
+    @Query('period') period?: DashboardPeriod,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.adminDashboardService.getAnalytics(period || 'week', startDate, endDate);
   }
 
   @Get('dashboard/stats')
@@ -1834,7 +1849,16 @@ export class AdminController {
       const payload = log.payload as any;
       let extractedData = {};
       
-      if (log.provider === 'budpay' && payload.data) {
+      if (log.provider === 'nyra' && payload.data) {
+        extractedData = {
+          reference: payload.data.external_reference || payload.data.reference,
+          amount: payload.data.amount_received || payload.data.amount_settled,
+          currency: payload.data.currency,
+          status: payload.data.status,
+          accountNumber: payload.data.credit_account_number,
+          customerEmail: payload.data.meta?.customer_email,
+        };
+      } else if (log.provider === 'budpay' && payload.data) {
         extractedData = {
           reference: payload.data.reference,
           amount: payload.data.amount,
@@ -1914,7 +1938,22 @@ export class AdminController {
     const payload = webhookLog.payload as any;
     let structuredPayload = payload;
     
-    if (webhookLog.provider === 'budpay' && payload.data) {
+    if (webhookLog.provider === 'nyra' && payload.data) {
+      structuredPayload = {
+        event: payload.event,
+        data: {
+          external_reference: payload.data.external_reference,
+          reference: payload.data.reference,
+          amount_received: payload.data.amount_received,
+          amount_settled: payload.data.amount_settled,
+          currency: payload.data.currency,
+          status: payload.data.status,
+          credit_account_number: payload.data.credit_account_number,
+          sender_name: payload.data.sender_name,
+          paid_at: payload.data.paid_at,
+        },
+      };
+    } else if (webhookLog.provider === 'budpay' && payload.data) {
       structuredPayload = {
         notifyType: payload.notifyType,
         data: {

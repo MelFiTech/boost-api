@@ -5,15 +5,24 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { SmmstoneModule } from './smmstone/smmstone.module';
+import { FeaturesModule } from './features/features.module';
+import { AppSettingsModule } from './app-settings/app-settings.module';
+import { ProvidersModule } from './providers/providers.module';
+import { WalletModule } from './wallet/wallet.module';
+import { BillsModule } from './bills/bills.module';
+import { KycModule } from './kyc/kyc.module';
+import { BankAccountsModule } from './bank-accounts/bank-accounts.module';
+import { PinModule } from './pin/pin.module';
+import { AdminUiModule } from './admin-ui/admin-ui.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SMMService } from './services/smm.service';
 import { PlatformService } from './services/platform.service';
 import { OrdersService } from './services/orders.service';
 import { PaymentService } from './services/payment.service';
-import { BudPayService } from './services/budpay.service';
 import { NotificationService } from './services/notification.service';
 import { UserService } from './services/user.service';
+import { AdminDashboardService } from './services/admin-dashboard.service';
 import { SmmstoneService } from './smmstone/smmstone.service';
 import { SMMController } from './controllers/smm.controller';
 import { OrdersController } from './controllers/orders.controller';
@@ -32,9 +41,18 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     AuthModule,
     NotificationsModule,
     SmmstoneModule,
+    FeaturesModule,
+    AppSettingsModule,
+    ProvidersModule,
+    WalletModule,
+    BillsModule,
+    KycModule,
+    BankAccountsModule,
+    PinModule,
+    AdminUiModule,
   ],
   controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController, UserController, UserOrdersController],
-  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, BudPayService, NotificationService, UserService, SmmstoneService],
+  providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, NotificationService, UserService, SmmstoneService, AdminDashboardService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

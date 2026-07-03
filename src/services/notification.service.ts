@@ -48,52 +48,33 @@ export class NotificationService {
         }
       }
 
-      // Check if token already exists
-      const existingToken = await this.prisma.deviceToken.findUnique({
+      const token = await this.prisma.deviceToken.upsert({
         where: { token: dto.token },
-      });
-
-      if (existingToken) {
-        // Update existing token
-        const updatedToken = await this.prisma.deviceToken.update({
-          where: { token: dto.token },
-          data: {
-            userId: validUserId || existingToken.userId,
-            platform: dto.platform,
-            deviceInfo: dto.deviceInfo || existingToken.deviceInfo,
-            isActive: true,
-            lastUsed: new Date(),
-            updatedAt: new Date(),
-          },
-        });
-
-        this.logger.log(`Device token updated: ${dto.token.substring(0, 20)}...`);
-        return {
-          success: true,
-          tokenId: updatedToken.id,
-          message: 'Device token updated successfully',
-          isGuest: !validUserId,
-        };
-      }
-
-      // Create new token
-      const newToken = await this.prisma.deviceToken.create({
-        data: {
+        update: {
+          ...(validUserId ? { userId: validUserId } : {}),
+          platform: dto.platform,
+          ...(dto.deviceInfo ? { deviceInfo: dto.deviceInfo } : {}),
+          isActive: true,
+          lastUsed: new Date(),
+        },
+        create: {
           token: dto.token,
           platform: dto.platform,
-          userId: validUserId, // This will be null if user doesn't exist
+          userId: validUserId,
           deviceInfo: dto.deviceInfo,
           isActive: true,
           lastUsed: new Date(),
         },
       });
 
-      this.logger.log(`Device token registered: ${dto.token.substring(0, 20)}...${validUserId ? ` for user ${validUserId}` : ' as guest'}`);
+      this.logger.log(
+        `Device token registered: ${dto.token.substring(0, 20)}...${token.userId ? ` for user ${token.userId}` : ' as guest'}`,
+      );
       return {
         success: true,
-        tokenId: newToken.id,
+        tokenId: token.id,
         message: 'Device token registered successfully',
-        isGuest: !validUserId,
+        isGuest: !token.userId,
       };
 
     } catch (error) {

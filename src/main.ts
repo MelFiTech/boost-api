@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { json } from 'express';
@@ -40,12 +40,19 @@ async function bootstrap() {
     },
   });
 
-  // Global prefix for API versioning
-  app.setGlobalPrefix('api/v1');
+  // Global prefix for API versioning (admin UI served at /admin without prefix)
+  app.setGlobalPrefix('api/v1', {
+    exclude: [
+      { path: '', method: RequestMethod.GET },
+      { path: 'admin', method: RequestMethod.GET },
+      { path: 'admin/assets/logo.png', method: RequestMethod.GET },
+    ],
+  });
 
   const port = process.env.PORT || 8080;
   await app.listen(port, '0.0.0.0');
   console.log(`Application is running on: http://0.0.0.0:${port}`);
+  console.log(`Admin dashboard available at: http://0.0.0.0:${port}/admin`);
   console.log(`API Documentation available at: http://0.0.0.0:${port}/docs`);
 }
 bootstrap();
