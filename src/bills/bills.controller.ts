@@ -82,6 +82,13 @@ export class BillsController {
     return { success: true, data };
   }
 
+  @Get('payments/:paymentId')
+  @ApiOperation({ summary: 'Get a single bill payment (e.g. electricity token)' })
+  async getPayment(@Request() req, @Param('paymentId') paymentId: string) {
+    const data = await this.billsService.getPayment(req.user.userId, paymentId);
+    return { success: true, data };
+  }
+
   @Get('vas/services')
   @ApiOperation({ summary: 'List Nyra VAS services (airtime, data, TV, electricity)' })
   async listServices() {

@@ -56,9 +56,10 @@ export class AdminController {
     type: RatesResponseDto
   })
   async getCurrentRates(): Promise<RatesResponseDto> {
-    // Markup is persisted in AppSettings (live); exchange rate stays env-based
-    const markupPercentage = await this.appSettingsService.getSmmMarkupPercent();
-    const usdtExchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const [markupPercentage, usdtExchangeRate] = await Promise.all([
+      this.appSettingsService.getSmmMarkupPercent(),
+      this.appSettingsService.getUsdtExchangeRate(),
+    ]);
 
     // Example calculation
     const exampleProviderRate = 1.0; // $1 USDT
@@ -117,17 +118,34 @@ export class AdminController {
     }
   })
   async updateRates(@Body() updateRatesDto: UpdateRatesDto) {
-    const previousMarkup = await this.appSettingsService.getSmmMarkupPercent();
-    const currentExchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const [previousMarkup, previousExchangeRate] = await Promise.all([
+      this.appSettingsService.getSmmMarkupPercent(),
+      this.appSettingsService.getUsdtExchangeRate(),
+    ]);
 
-    // Markup is persisted in AppSettings and applied live at pricing time —
-    // no re-sync needed. Exchange rate is still env-configured.
-    let newMarkup = previousMarkup;
+    const settingsUpdate: {
+      smmMarkupPercent?: number;
+      usdtExchangeRate?: number;
+    } = {};
+
     if (updateRatesDto.markupPercentage !== undefined) {
-      const updated = await this.appSettingsService.updateSettings({
-        smmMarkupPercent: updateRatesDto.markupPercentage,
-      });
-      newMarkup = parseFloat(updated.smmMarkupPercent.toString());
+      settingsUpdate.smmMarkupPercent = updateRatesDto.markupPercentage;
+    }
+    if (updateRatesDto.usdtExchangeRate !== undefined) {
+      settingsUpdate.usdtExchangeRate = updateRatesDto.usdtExchangeRate;
+    }
+
+    let newMarkup = previousMarkup;
+    let newExchangeRate = previousExchangeRate;
+
+    if (Object.keys(settingsUpdate).length > 0) {
+      const updated = await this.appSettingsService.updateSettings(settingsUpdate);
+      if (updateRatesDto.markupPercentage !== undefined) {
+        newMarkup = parseFloat(updated.smmMarkupPercent.toString());
+      }
+      if (updateRatesDto.usdtExchangeRate !== undefined) {
+        newExchangeRate = parseFloat(updated.usdtExchangeRate.toString());
+      }
     }
 
     return {
@@ -135,13 +153,13 @@ export class AdminController {
       message: 'Rates updated successfully',
       previousRates: {
         markupPercentage: previousMarkup,
-        usdtExchangeRate: currentExchangeRate,
+        usdtExchangeRate: previousExchangeRate,
       },
       newRates: {
         markupPercentage: newMarkup,
-        usdtExchangeRate: updateRatesDto.usdtExchangeRate || currentExchangeRate,
+        usdtExchangeRate: newExchangeRate,
       },
-      note: 'Markup applies immediately to all new orders — no re-sync required.',
+      note: 'Rates apply immediately to all new orders — no re-sync required.',
     };
   }
 
@@ -161,9 +179,10 @@ export class AdminController {
     }
   })
   async recalculatePrices() {
-    // This would trigger a recalculation of all boost rates
-    const markupPercentage = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const [markupPercentage, exchangeRate] = await Promise.all([
+      this.appSettingsService.getSmmMarkupPercent(),
+      this.appSettingsService.getUsdtExchangeRate(),
+    ]);
 
     // TODO: Implement actual price recalculation
     // This would update all services in the database with new boost rates
@@ -222,7 +241,7 @@ export class AdminController {
 
     const serviceCount = await this.prisma.service.count();
     const platformCount = await this.prisma.platform.count();
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
     const revenueNGN = totalRevenue._sum.price || 0;
     const revenueUSDT = parseFloat((revenueNGN / exchangeRate).toFixed(2));
@@ -364,7 +383,7 @@ export class AdminController {
       providers: providerCount,
       rates: {
         markupPercentage: this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30,
-        usdtExchangeRate: this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500
+        usdtExchangeRate: await this.appSettingsService.getUsdtExchangeRate(),
       }
     };
   }
@@ -437,7 +456,7 @@ export class AdminController {
       take: 100 // Limit to recent 100 orders
     });
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const markup = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
 
     return {
@@ -509,7 +528,7 @@ export class AdminController {
       }
     });
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const markup = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
 
     return {
@@ -632,7 +651,7 @@ export class AdminController {
       });
     });
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
     return {
       success: true,
@@ -717,7 +736,7 @@ export class AdminController {
       }
     });
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
     return {
       success: true,
@@ -804,7 +823,7 @@ export class AdminController {
     }
   })
   async getOngoingOrders() {
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const markup = this.configService.get<number>('MARKUP_PERCENTAGE') || 30;
 
     const ongoingOrders = await this.prisma.order.findMany({
@@ -975,7 +994,7 @@ export class AdminController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string
   ) {
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const markup = this.configService.get<number>('MARKUP_PERCENTAGE') || 30;
     
     const pageNum = parseInt(page) || 1;
@@ -1248,7 +1267,7 @@ export class AdminController {
       this.prisma.user.count({ where })
     ]);
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
     const usersWithStats = users.map(user => {
       const totalOrders = user.orders.length;
@@ -1375,7 +1394,7 @@ export class AdminController {
       throw new Error('User not found');
     }
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
     // Calculate statistics
     const totalOrders = user.orders.length;
@@ -1574,7 +1593,7 @@ export class AdminController {
       this.prisma.serviceProvider.findMany({ select: { name: true } })
     ]);
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const markup = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
 
     const formattedServices = services.map(service => ({
@@ -1675,7 +1694,7 @@ export class AdminController {
       throw new Error('Service not found');
     }
 
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const markup = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
 
     // Calculate service statistics

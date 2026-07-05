@@ -23,10 +23,12 @@ export interface UpdateAppSettingsInput {
   fundingFee?: number;
   withdrawalFee?: number;
   smmMarkupPercent?: number;
+  usdtExchangeRate?: number;
   updatedBy?: string;
 }
 
 export const DEFAULT_SMM_MARKUP_PERCENT = 10;
+export const DEFAULT_USDT_EXCHANGE_RATE = 1500;
 
 @Injectable()
 export class AppSettingsService implements OnModuleInit {
@@ -64,6 +66,13 @@ export class AppSettingsService implements OnModuleInit {
     return value > 0 ? value : DEFAULT_SMM_MARKUP_PERCENT;
   }
 
+  /** Live USDT → NGN rate (default ₦1500). Managed from admin Pricing & Rates. */
+  async getUsdtExchangeRate(): Promise<number> {
+    const settings = await this.getOrCreate();
+    const value = this.toNumber(settings.usdtExchangeRate);
+    return value > 0 ? value : DEFAULT_USDT_EXCHANGE_RATE;
+  }
+
   async getSettings() {
     return this.getOrCreate();
   }
@@ -95,6 +104,9 @@ export class AppSettingsService implements OnModuleInit {
     if (input.smmMarkupPercent !== undefined) {
       // Clamp to a sane range so a fat-fingered admin can't zero out margins
       data.smmMarkupPercent = Math.min(1000, Math.max(0, input.smmMarkupPercent));
+    }
+    if (input.usdtExchangeRate !== undefined) {
+      data.usdtExchangeRate = Math.min(100000, Math.max(1, input.usdtExchangeRate));
     }
     if (input.updatedBy !== undefined) {
       data.updatedBy = input.updatedBy;

@@ -65,6 +65,7 @@ export function getAdminDashboardHtml(apiBase: string): string {
         <button class="nav-item" data-page="pricing"><span class="nav-icon"><i class="ph ph-currency-circle-dollar"></i></span><span class="nav-label">Pricing &amp; Rates</span></button>
         <button class="nav-item" data-page="settings"><span class="nav-icon"><i class="ph ph-device-mobile"></i></span><span class="nav-label">App Settings</span></button>
         <button class="nav-item" data-page="push"><span class="nav-icon"><i class="ph ph-bell-ringing"></i></span><span class="nav-label">Push Notifications</span></button>
+        <button class="nav-item" data-page="emails"><span class="nav-icon"><i class="ph ph-envelope-simple"></i></span><span class="nav-label">Email Templates</span></button>
 
         <div class="nav-section">Monitoring</div>
         <button class="nav-item" data-page="webhooks"><span class="nav-icon"><i class="ph ph-broadcast"></i></span><span class="nav-label">Webhooks</span></button>
@@ -313,6 +314,31 @@ export function getAdminDashboardHtml(apiBase: string): string {
                 </div>
               </div>
               <div class="panel-body padded" id="pushTemplatesBody"></div>
+            </div>
+          </div>
+        </section>
+
+        <section data-page-panel="emails" class="hidden">
+          <div class="grid-2">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h3>Email templates</h3>
+                  <p class="muted" style="margin-top:4px;font-size:.82rem">Preview ZeptoMail templates. Edit HTML in <code>src/emails/templates/</code>.</p>
+                </div>
+              </div>
+              <div class="panel-body padded" id="emailTemplatesBody"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h3>Live preview</h3>
+                  <p class="muted" style="margin-top:4px;font-size:.82rem">Sample data — production sends real user values.</p>
+                </div>
+              </div>
+              <div class="panel-body padded" style="padding-top:0">
+                <iframe id="emailPreviewFrame" title="Email preview" class="email-preview-frame"></iframe>
+              </div>
             </div>
           </div>
         </section>

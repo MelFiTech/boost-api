@@ -10,6 +10,9 @@ import {
 } from '../dto/notification.dto';
 import { AdminSendPushDto, PushAudience } from '../dto/admin-push.dto';
 import { DevicePlatform, NotificationType, NotificationStatus, Prisma } from '@prisma/client';
+import { NotificationPreferencesService } from './notification-preferences.service';
+import { EmailService } from '../emails/email.service';
+import { resolveOrderReceiptEmail } from './order-receipt.util';
 
 @Injectable()
 export class NotificationService {
@@ -77,6 +80,8 @@ export class NotificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly expoPushService: ExpoPushService,
+    private readonly notificationPreferences: NotificationPreferencesService,
+    private readonly emailService: EmailService,
   ) {}
 
   // Device Token Management
@@ -253,21 +258,44 @@ export class NotificationService {
     this.logger.debug(`Sending notification: ${dto.title}`);
 
     try {
-      let deviceTokens: string[] = [];
+      let targetUserIds = dto.userIds?.length
+        ? await this.notificationPreferences.filterPushEnabledUserIds([...new Set(dto.userIds)])
+        : undefined;
 
-      // Get device tokens
+      let deviceTokens: string[] = [];
+      const pushEnabledFilter: Prisma.DeviceTokenWhereInput = {
+        OR: [{ userId: null }, { user: { pushNotifications: true } }],
+      };
+
       if (dto.deviceTokens && dto.deviceTokens.length > 0) {
-        deviceTokens = dto.deviceTokens;
-      } else if (dto.userIds && dto.userIds.length > 0) {
         const tokens = await this.prisma.deviceToken.findMany({
           where: {
-            userId: { in: dto.userIds },
+            token: { in: dto.deviceTokens },
             isActive: true,
+            ...pushEnabledFilter,
           },
           select: { token: true },
-          distinct: ['token'], // Ensure we don't get duplicate tokens from database
         });
-        deviceTokens = tokens.map(t => t.token);
+        deviceTokens = tokens.map((t) => t.token);
+      } else if (targetUserIds && targetUserIds.length > 0) {
+        const tokens = await this.prisma.deviceToken.findMany({
+          where: {
+            userId: { in: targetUserIds },
+            isActive: true,
+            user: { pushNotifications: true },
+          },
+          select: { token: true },
+          distinct: ['token'],
+        });
+        deviceTokens = tokens.map((t) => t.token);
+      } else if (dto.userIds?.length) {
+        this.logger.log('Push skipped: all target users opted out of push notifications');
+        return {
+          success: true,
+          message: 'Push disabled by user preference',
+          sentCount: 0,
+          failedCount: 0,
+        };
       } else {
         throw new BadRequestException('Either userIds or deviceTokens must be provided');
       }
@@ -302,7 +330,7 @@ export class NotificationService {
       }
 
       // Create notification records in database
-      const notificationPromises = dto.userIds?.map(userId => 
+      const notificationPromises = targetUserIds?.map(userId =>
         this.prisma.userNotification.create({
           data: {
             userId: userId,
@@ -431,11 +459,27 @@ export class NotificationService {
           user: true,
           service: true,
           platform: true,
+          payment: {
+            select: {
+              customerEmail: true,
+              transactions: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: { customerEmail: true },
+              },
+            },
+          },
         },
       });
 
-      if (!order || !order.userId) {
-        this.logger.warn(`Order not found or no user associated: ${orderId}`);
+      if (!order) {
+        this.logger.warn(`Order not found: ${orderId}`);
+        return;
+      }
+
+      const recipient = await resolveOrderReceiptEmail(this.prisma, orderId);
+      if (!order.userId && !recipient?.email) {
+        this.logger.warn(`Order ${orderId} has no receipt email on record`);
         return;
       }
 
@@ -467,24 +511,111 @@ export class NotificationService {
         throw new BadRequestException('Invalid notification type');
       }
 
-      return await this.sendNotification({
-        title: template.title,
-        body: template.body,
-        type: template.type,
-        userIds: [order.userId],
-        orderId: orderId,
-        data: {
+      let pushResult: Awaited<ReturnType<NotificationService['sendNotification']>> | null = null;
+      if (order.userId) {
+        pushResult = await this.sendNotification({
+          title: template.title,
+          body: template.body,
+          type: template.type,
+          userIds: [order.userId],
           orderId: orderId,
-          platform: order.platform.name,
-          service: order.service.name,
-          quantity: order.quantity.toString(),
-          price: order.price.toString(),
-        },
-      });
+          data: {
+            orderId: orderId,
+            platform: order.platform.name,
+            service: order.service.name,
+            quantity: order.quantity.toString(),
+            price: order.price.toString(),
+          },
+        });
+      }
+
+      void this.sendOrderEmail(order, type, recipient).catch((err) =>
+        this.logger.warn(`Order email failed for ${orderId}: ${err.message}`),
+      );
+
+      return (
+        pushResult ?? {
+          success: true,
+          message: 'Email-only notification (guest order)',
+          sentCount: 0,
+          failedCount: 0,
+        }
+      );
 
     } catch (error) {
       this.logger.error(`Failed to send order notification: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+
+  private async sendOrderEmail(
+    order: {
+      id: string;
+      userId: string | null;
+      link: string;
+      quantity: number;
+      price: number;
+      createdAt: Date;
+      updatedAt: Date;
+      user: { id: string; email: string; username: string | null } | null;
+      service: { name: string };
+      platform: { name: string };
+    },
+    type: 'payment_received' | 'order_approved' | 'order_rejected' | 'order_completed',
+    recipient?: { email: string; userId?: string; userName: string } | null,
+  ) {
+    const resolved =
+      recipient ??
+      (await resolveOrderReceiptEmail(this.prisma, order.id));
+    if (!resolved?.email) return;
+
+    const userName = resolved.userName;
+    const userId = resolved.userId;
+    const email = resolved.email;
+    const baseData = {
+      orderId: order.id,
+      serviceName: order.service.name,
+      platform: order.platform.name,
+      quantity: order.quantity,
+      targetUrl: order.link,
+      userName,
+    };
+
+    if (type === 'order_completed') {
+      const result = await this.emailService.sendOrderCompletionEmail({
+        email,
+        userId,
+        orderData: {
+          ...baseData,
+          completedDate: order.updatedAt,
+          amount: order.price,
+        },
+      });
+      if (result.skipped) {
+        this.logger.debug(`Order completion email skipped for ${order.id} (opted out)`);
+      }
+      return;
+    }
+
+    const statusMap = {
+      payment_received: 'pending' as const,
+      order_approved: 'processing' as const,
+      order_rejected: 'cancelled' as const,
+    };
+    const status = statusMap[type];
+    if (!status) return;
+
+    const result = await this.emailService.sendOrderStatusEmail({
+      email,
+      userId,
+      orderData: {
+        ...baseData,
+        status,
+        orderDate: order.createdAt,
+      },
+    });
+    if (result.skipped) {
+      this.logger.debug(`Order status email skipped for ${order.id} (opted out)`);
     }
   }
 
@@ -626,13 +757,15 @@ export class NotificationService {
         if (!userIds?.length) {
           throw new BadRequestException('userIds is required when audience is individuals');
         }
-        resolvedUserIds = [...new Set(userIds)];
+        resolvedUserIds = await this.notificationPreferences.filterPushEnabledUserIds([
+          ...new Set(userIds),
+        ]);
         tokenWhere = { ...tokenWhere, userId: { in: resolvedUserIds } };
         break;
       }
       case PushAudience.VERIFIED_USERS: {
         const users = await this.prisma.user.findMany({
-          where: { isVerified: true },
+          where: { isVerified: true, pushNotifications: true },
           select: { id: true },
         });
         resolvedUserIds = users.map((u) => u.id);
@@ -641,7 +774,7 @@ export class NotificationService {
       }
       case PushAudience.UNVERIFIED_USERS: {
         const users = await this.prisma.user.findMany({
-          where: { isVerified: false },
+          where: { isVerified: false, pushNotifications: true },
           select: { id: true },
         });
         resolvedUserIds = users.map((u) => u.id);
@@ -656,7 +789,7 @@ export class NotificationService {
         break;
       case PushAudience.ACTIVE_30D: {
         const users = await this.prisma.user.findMany({
-          where: { updatedAt: { gte: activeSince } },
+          where: { updatedAt: { gte: activeSince }, pushNotifications: true },
           select: { id: true },
         });
         resolvedUserIds = users.map((u) => u.id);
@@ -665,7 +798,7 @@ export class NotificationService {
       }
       case PushAudience.WITH_ORDERS: {
         const users = await this.prisma.user.findMany({
-          where: { orders: { some: {} } },
+          where: { orders: { some: {} }, pushNotifications: true },
           select: { id: true },
         });
         resolvedUserIds = users.map((u) => u.id);
@@ -681,7 +814,10 @@ export class NotificationService {
     }
 
     const tokens = await this.prisma.deviceToken.findMany({
-      where: tokenWhere,
+      where: {
+        ...tokenWhere,
+        OR: [{ userId: null }, { user: { pushNotifications: true } }],
+      },
       select: { token: true, userId: true },
     });
 
@@ -713,6 +849,12 @@ export class NotificationService {
   ) {
     if (!['COMPLETED', 'PROCESSING'].includes(tx.status)) return;
 
+    const canPush = await this.notificationPreferences.canReceivePush(userId);
+    if (!canPush) {
+      this.logger.debug(`Wallet push skipped for ${userId}: push notifications disabled`);
+      return;
+    }
+
     const amount = this.formatNgn(tx.amount);
     const balance = this.formatNgn(tx.balanceAfter);
     const isCredit = tx.type === 'CREDIT';
@@ -743,6 +885,77 @@ export class NotificationService {
     } catch (error) {
       this.logger.warn(
         `Wallet push failed for ${userId} (${tx.id}): ${error.message}`,
+      );
+    }
+  }
+
+  /** Push + email when Nyra delivers a prepaid electricity token. */
+  async notifyElectricityTokenDelivered(
+    userId: string,
+    payload: {
+      billPaymentId: string;
+      token: string;
+      meterNumber: string;
+      amount: number;
+      reference: string;
+      numberOfUnits?: string;
+      providerName?: string;
+    },
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, username: true },
+    });
+    if (!user?.email) {
+      this.logger.warn(`Electricity token notify skipped: no email for user ${userId}`);
+      return;
+    }
+
+    const userName = user.username || user.email.split('@')[0];
+    const unitsSuffix = payload.numberOfUnits ? ` · ${payload.numberOfUnits} kWh` : '';
+
+    try {
+      await this.sendNotification({
+        title: 'Electricity token ready',
+        body: `Token: ${payload.token}${unitsSuffix}`,
+        type: NotificationType.PAYMENT_UPDATE,
+        userIds: [userId],
+        data: {
+          type: 'electricity_token',
+          billPaymentId: payload.billPaymentId,
+          token: payload.token,
+          numberOfUnits: payload.numberOfUnits || '',
+          meterNumber: payload.meterNumber,
+          reference: payload.reference,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Electricity token push failed for ${userId}: ${error.message}`,
+      );
+    }
+
+    try {
+      const result = await this.emailService.sendElectricityTokenEmail({
+        email: user.email,
+        userId,
+        tokenData: {
+          userName,
+          token: payload.token,
+          meterNumber: payload.meterNumber,
+          amount: payload.amount,
+          reference: payload.reference,
+          numberOfUnits: payload.numberOfUnits,
+          providerName: payload.providerName,
+          date: new Date(),
+        },
+      });
+      if (result.skipped) {
+        this.logger.debug(`Electricity token email skipped for ${userId} (opted out)`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Electricity token email failed for ${userId}: ${error.message}`,
       );
     }
   }

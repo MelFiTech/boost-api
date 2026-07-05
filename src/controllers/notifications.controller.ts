@@ -23,6 +23,9 @@ import { AuthGuard } from '@nestjs/passport';
 import { OptionalAuthGuard } from '../auth/guards/optional-auth.guard';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import { EmailModule } from '../emails/email.module';
+import { EmailService } from '../emails/email.service';
+import { isEmailDevMode } from '../emails/email-mode.util';
 
 @ApiTags('notifications')
 @Controller('notifications')
@@ -32,6 +35,7 @@ export class NotificationsController {
   constructor(
     private readonly notificationService: NotificationService,
     private readonly expoPushService: ExpoPushService,
+    private readonly emailService: EmailService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -211,12 +215,8 @@ export class NotificationsController {
   // Email testing endpoints
   @Post('email/test-otp')
   async testOtpEmail(@Body() dto: { email: string; userName?: string }) {
-    // Import ResendService here to avoid circular dependency
-    const { ResendService } = await import('../services/resend.service');
-    const resendService = new ResendService(this.configService);
-    
-    const otp = resendService.generateOtp();
-    const result = await resendService.sendOtpEmail({
+    const otp = this.emailService.generateOtp();
+    const result = await this.emailService.sendOtpEmail({
       email: dto.email,
       otp,
       userName: dto.userName,
@@ -225,20 +225,17 @@ export class NotificationsController {
     return {
       success: result.success,
       message: result.success ? 'OTP email sent successfully' : 'Failed to send OTP email',
-      otp: process.env.NODE_ENV === 'development' ? otp : undefined,
+      otp: isEmailDevMode(this.configService) ? otp : undefined,
       messageId: result.messageId,
       error: result.error,
+      skipped: result.skipped,
     };
   }
 
   @Post('email/test-welcome')
-  async testWelcomeEmail(@Body() dto: { email: string; userName: string }) {
-    const { ResendService } = await import('../services/resend.service');
-    const resendService = new ResendService(this.configService);
-    
-    const result = await resendService.sendWelcomeEmail({
+  async testWelcomeEmail(@Body() dto: { email: string }) {
+    const result = await this.emailService.sendWelcomeEmail({
       email: dto.email,
-      userName: dto.userName,
     });
 
     return {
@@ -246,18 +243,16 @@ export class NotificationsController {
       message: result.success ? 'Welcome email sent successfully' : 'Failed to send welcome email',
       messageId: result.messageId,
       error: result.error,
+      skipped: result.skipped,
     };
   }
 
   @Post('email/test-order-status')
-  async testOrderStatusEmail(@Body() dto: { 
-    email: string; 
+  async testOrderStatusEmail(@Body() dto: {
+    email: string;
     userName?: string;
   }) {
-    const { ResendService } = await import('../services/resend.service');
-    const resendService = new ResendService(this.configService);
-    
-    const result = await resendService.sendOrderStatusEmail({
+    const result = await this.emailService.sendOrderStatusEmail({
       email: dto.email,
       orderData: {
         orderId: 'TEST-12345',
@@ -270,8 +265,8 @@ export class NotificationsController {
         orderDate: new Date(),
         completedDate: new Date(),
         progress: 100,
-        notes: 'This is a test order status email.'
-      }
+        notes: 'This is a test order status email.',
+      },
     });
 
     return {
@@ -279,14 +274,12 @@ export class NotificationsController {
       message: result.success ? 'Order status email sent successfully' : 'Failed to send order status email',
       messageId: result.messageId,
       error: result.error,
+      skipped: result.skipped,
     };
   }
 
   @Get('email/status')
   async getEmailServiceStatus() {
-    const { ResendService } = await import('../services/resend.service');
-    const resendService = new ResendService(this.configService);
-    
-    return resendService.getStatus();
+    return this.emailService.getStatus();
   }
 } 

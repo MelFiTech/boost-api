@@ -29,6 +29,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     pricing: 'Pricing & Rates',
     settings: 'App Settings',
     push: 'Push Notifications',
+    emails: 'Email Templates',
     webhooks: 'Webhooks',
   };
 
@@ -44,6 +45,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     pricing: loadPricing,
     settings: loadSettings,
     push: loadPushNotifications,
+    emails: loadEmailTemplates,
     webhooks: loadWebhooks,
   };
 
@@ -1136,6 +1138,66 @@ export function getAdminDashboardScript(apiBase: string): string {
         toast(e.message, true);
       }
     };
+  }
+
+  // ─── Email templates ─────────────────────────────────────────
+  async function loadEmailTemplates() {
+    $('emailTemplatesBody').innerHTML = '<div class="loading">Loading templates…</div>';
+    const frame = $('emailPreviewFrame');
+    if (frame) frame.srcdoc = '<p style="padding:24px;color:#888;font-family:sans-serif">Loading preview…</p>';
+    try {
+      const [templatesRes, statusRes] = await Promise.all([
+        apiFetch('/admin/emails/templates'),
+        apiFetch('/admin/emails/status'),
+      ]);
+      const templates = templatesRes.data || [];
+      const status = statusRes.data || {};
+      $('emailTemplatesBody').innerHTML =
+        '<div class="health-grid" style="margin-bottom:16px">' +
+        '<div class="health-item"><span>Provider</span><strong>' + (status.provider || 'zeptomail') + '</strong></div>' +
+        '<div class="health-item"><span>Mode</span><strong>' + (status.devMode ? 'Dev (no send)' : 'Production') + '</strong></div>' +
+        '<div class="health-item"><span>From</span><strong>' + (status.fromEmail || '—') + '</strong></div>' +
+        '</div>' +
+        '<label class="field-label">Template</label>' +
+        '<select class="select" id="emailTemplateSelect">' +
+        templates.map((t) => '<option value="' + t.slug + '">' + t.name + '</option>').join('') +
+        '</select>' +
+        '<p class="muted" style="margin:12px 0 0;font-size:.82rem" id="emailTemplateDesc">' + (templates[0]?.description || '') + '</p>' +
+        '<p class="muted" style="margin:8px 0 0;font-size:.82rem">Subject: <strong id="emailTemplateSubject">' + (templates[0]?.subject || '') + '</strong></p>' +
+        '<div class="template-file-list">' +
+        '<p class="muted" style="font-size:.82rem;margin-bottom:8px">Edit these files to restyle:</p>' +
+        '<code>src/emails/templates/layout.ts</code><br/>' +
+        '<code>src/emails/templates/otp.template.ts</code><br/>' +
+        '<code>src/emails/templates/welcome.template.ts</code><br/>' +
+        '<code>src/emails/templates/order-status.template.ts</code><br/>' +
+        '<code>src/emails/templates/order-completion.template.ts</code><br/>' +
+        '<code>src/emails/templates/txn-success.template.ts</code><br/>' +
+        '<code>src/emails/templates/withdrawal.template.ts</code><br/>' +
+        '<code>src/emails/templates/wallet-topup.template.ts</code><br/>' +
+        '<code>src/emails/templates/electricity-token.template.ts</code><br/>' +
+        '<code>src/emails/templates/custom.template.ts</code>' +
+        '</div>' +
+        '<button class="btn btn-primary btn-sm" id="refreshEmailPreviewBtn" style="margin-top:16px">Refresh preview</button>';
+
+      async function previewTemplate(slug) {
+        const tpl = templates.find((t) => t.slug === slug);
+        if ($('emailTemplateDesc')) $('emailTemplateDesc').textContent = tpl?.description || '';
+        if ($('emailTemplateSubject')) $('emailTemplateSubject').textContent = tpl?.subject || '';
+        const res = await fetch(API + '/admin/emails/preview/' + slug, {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        const html = await res.text();
+        if (frame) frame.srcdoc = html;
+      }
+
+      const select = $('emailTemplateSelect');
+      select.onchange = () => previewTemplate(select.value);
+      $('refreshEmailPreviewBtn').onclick = () => previewTemplate(select.value);
+      if (templates.length) await previewTemplate(templates[0].slug);
+    } catch (e) {
+      $('emailTemplatesBody').innerHTML = errHtml(null, e.message);
+      if (frame) frame.srcdoc = errHtml(null, e.message);
+    }
   }
 
   // ─── App settings ────────────────────────────────────────────

@@ -1,7 +1,9 @@
 import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
-import { ResendService } from '../services/resend.service';
+import { ConfigService } from '@nestjs/config';
+import { EmailService } from '../emails/email.service';
+import { isEmailDevMode } from '../emails/email-mode.util';
 import { GeminiService } from '../services/gemini.service';
 
 @Injectable()
@@ -12,8 +14,9 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
-    private readonly resendService: ResendService,
+    private readonly emailService: EmailService,
     private readonly geminiService: GeminiService,
+    private readonly configService: ConfigService,
   ) {}
 
   private generateOTP(): string {
@@ -57,11 +60,12 @@ export class AuthService {
       this.logger.debug(`Requesting OTP for email: ${email}`);
 
       // Validate email format
-      if (!this.resendService.isValidEmail(email)) {
+      if (!this.emailService.isValidEmail(email)) {
         throw new UnauthorizedException('Invalid email format');
       }
 
-      const otp = process.env.NODE_ENV === 'development' ? this.DEV_OTP : this.generateOTP();
+      const devMode = isEmailDevMode(this.configService);
+      const otp = devMode ? this.DEV_OTP : this.generateOTP();
       const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
 
       // Check if user exists
@@ -97,9 +101,8 @@ export class AuthService {
         },
       });
 
-      // Send OTP email (skipped in development — use fixed OTP 123456)
-      if (process.env.NODE_ENV !== 'development') {
-        const emailResult = await this.resendService.sendOtpEmail({
+      if (!devMode) {
+        const emailResult = await this.emailService.sendOtpEmail({
           email,
           otp,
           userName: user.username || undefined,
@@ -112,19 +115,17 @@ export class AuthService {
 
         this.logger.log(`OTP sent successfully to ${email}. Message ID: ${emailResult.messageId}`);
       } else {
-        this.logger.warn(`Development mode: OTP for ${email} is ${this.DEV_OTP} (email not sent)`);
+        this.logger.warn(`Email dev mode: OTP for ${email} is ${this.DEV_OTP} (email not sent)`);
       }
 
-      // If it's a new user, send welcome email after successful OTP send
-      if (isNewUser && process.env.NODE_ENV !== 'development') {
+      if (isNewUser && !devMode) {
         try {
-          await this.resendService.sendWelcomeEmail({
+          await this.emailService.sendWelcomeEmail({
             email,
-            userName: user.username || email.split('@')[0], // Use username or email prefix
+            userId: user.id,
           });
           this.logger.log(`Welcome email sent to new user: ${email}`);
         } catch (error) {
-          // Don't fail the OTP request if welcome email fails
           this.logger.warn(`Failed to send welcome email to ${email}:`, error);
         }
       }
@@ -132,8 +133,7 @@ export class AuthService {
       return {
         message: 'OTP sent successfully',
         isNewUser,
-        // Remove OTP from response in production
-        ...(process.env.NODE_ENV === 'development' && { otp }),
+        ...(devMode && { otp }),
       };
     } catch (error) {
       this.logger.error(`Error requesting OTP for ${email}:`, error);
@@ -153,8 +153,8 @@ export class AuthService {
         throw new UnauthorizedException('User not found');
       }
 
-      const isDevOtp =
-        process.env.NODE_ENV === 'development' && otp === this.DEV_OTP;
+      const devMode = isEmailDevMode(this.configService);
+      const isDevOtp = devMode && otp === this.DEV_OTP;
 
       if (!isDevOtp) {
         if (!user.otp || !user.otpExpiry) {

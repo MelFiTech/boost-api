@@ -616,8 +616,8 @@ export class SmmstoneService {
 
         this.logger.log(`Updated order ${order.id} status: ${order.status} → ${newStatus}`);
 
-        // Send notification to user if status changed significantly
-        if (order.user && shouldNotify && notificationMessage) {
+        // Notify on significant status changes (push for app users, email for all with receipt email)
+        if (shouldNotify && notificationMessage) {
           try {
             const typeMap = {
               COMPLETED: 'order_completed' as const,
@@ -628,7 +628,7 @@ export class SmmstoneService {
             const notifyType = typeMap[newStatus as keyof typeof typeMap];
             if (notifyType) {
               await this.notificationService.sendOrderNotification(order.id, notifyType);
-            } else {
+            } else if (order.user) {
               await this.notificationService.sendNotification({
                 title: 'Order Status Update',
                 body: notificationMessage,
@@ -638,7 +638,7 @@ export class SmmstoneService {
                 data: { orderId: order.id, status: newStatus, type: 'order_update' },
               });
             }
-            this.logger.log(`Sent push notification for order ${order.id}`);
+            this.logger.log(`Sent order notification for order ${order.id}`);
           } catch (notificationError) {
             this.logger.error(`Failed to send notification for order ${order.id}:`, notificationError);
           }

@@ -5,11 +5,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthController } from './auth.controller';
-import { ResendService } from '../services/resend.service';
+import { EmailModule } from '../emails/email.module';
 import { GeminiService } from '../services/gemini.service';
 
 @Module({
   imports: [
+    EmailModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -20,8 +21,8 @@ import { GeminiService } from '../services/gemini.service';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy, ResendService, GeminiService],
+  providers: [AuthService, JwtStrategy, GeminiService],
   controllers: [AuthController],
-  exports: [AuthService, ResendService, GeminiService],
+  exports: [AuthService, GeminiService],
 })
 export class AuthModule {} 

@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { OrderStatus, PaymentStatus, TransactionStatus } from '@prisma/client';
 import { NyraApiService } from '../providers/nyra/nyra-api.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 import { SmmstoneService } from '../smmstone/smmstone.service';
 import {
   LOW_PROVIDER_BALANCE_ISSUE,
@@ -24,9 +24,9 @@ export class AdminDashboardService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
     private readonly smmstoneService: SmmstoneService,
     private readonly nyraApi: NyraApiService,
+    private readonly appSettingsService: AppSettingsService,
   ) {}
 
   resolveDateRange(
@@ -87,7 +87,7 @@ export class AdminDashboardService {
     const range = this.resolveDateRange(period, startDate, endDate);
     const from = new Date(range.from);
     const to = new Date(range.to);
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     const dateFilter = { gte: from, lte: to };
 
     const [

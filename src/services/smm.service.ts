@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlatformService } from './platform.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 import axios from 'axios';
 import { SMMServiceRequest, ServiceResponse, SMMService as SMMServiceType } from '../types/smm.types';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -13,17 +14,16 @@ export class SMMService {
   private readonly apiUrl: string;
   private readonly apiKey: string;
   private readonly markupPercentage: number;
-  private readonly usdtRate: number;
 
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
     private platformService: PlatformService,
+    private readonly appSettingsService: AppSettingsService,
   ) {
     this.apiUrl = this.configService.get<string>('SMMSTONE_API_URL');
     this.apiKey = this.configService.get<string>('SMMSTONE_API_KEY');
     this.markupPercentage = this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30;
-    this.usdtRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 0;
   }
 
   // Only sync services we actually sell — keeps the shared DB lean
@@ -299,10 +299,8 @@ export class SMMService {
     return services as ServiceResponse[];
   }
 
-  // TODO: Implement this method to get current USDT to NGN rate
   private async getUSDTtoNGNRate(): Promise<number> {
-    // For now returning a fixed rate
-    return 1500; // 1 USDT = 1500 NGN
+    return this.appSettingsService.getUsdtExchangeRate();
   }
 
   async findBestMatchingService(dto: ServiceRequestDto) {
@@ -356,8 +354,9 @@ export class SMMService {
     }
 
     // Calculate total price
+    const usdtRate = await this.getUSDTtoNGNRate();
     const priceInUSDT = service.boostRate * dto.quantity;
-    const price = dto.currency === Currency.NGN ? priceInUSDT * this.usdtRate : priceInUSDT;
+    const price = dto.currency === Currency.NGN ? priceInUSDT * usdtRate : priceInUSDT;
 
     return {
       service,
@@ -368,7 +367,7 @@ export class SMMService {
         ratePerItem: service.boostRate,
         currency: dto.currency,
         totalPrice: price,
-        exchangeRate: dto.currency === Currency.NGN ? this.usdtRate : 1
+        exchangeRate: dto.currency === Currency.NGN ? usdtRate : 1
       }
     };
   }

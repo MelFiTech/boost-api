@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   BillType,
   Prisma,
@@ -17,6 +17,7 @@ import {
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { PayBillResult } from '../providers/provider.types';
 import { WalletService } from '../wallet/wallet.service';
+import { summarizeBillPayment } from './bill-payment-summary.util';
 
 export interface PayBillInput {
   billType: BillType;
@@ -97,6 +98,9 @@ export class BillsService {
         billerCode: input.billerCode || input.network || input.bundleId || input.packageId,
         amount: new Prisma.Decimal(input.amount.toFixed(2)),
         status: TransactionStatus.PROCESSING,
+        ...(input.billerName
+          ? { metadata: { billerName: input.billerName } as Prisma.InputJsonValue }
+          : {}),
       },
     });
 
@@ -117,7 +121,11 @@ export class BillsService {
         data: {
           status: this.mapProviderStatus(result.status),
           providerRef: result.providerRef,
-          metadata: result.metadata,
+          metadata: {
+            ...((billPayment.metadata as object) || {}),
+            ...(result.metadata || {}),
+            ...(input.billerName ? { billerName: input.billerName } : {}),
+          },
         },
       });
     } catch (error) {
@@ -183,7 +191,22 @@ export class BillsService {
       }),
       this.prisma.billPayment.count({ where: { userId } }),
     ]);
-    return { items, total, page, limit };
+    return {
+      items: items.map((item) => summarizeBillPayment(item)),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async getPayment(userId: string, paymentId: string) {
+    const payment = await this.prisma.billPayment.findFirst({
+      where: { id: paymentId, userId },
+    });
+    if (!payment) {
+      throw new NotFoundException('Bill payment not found');
+    }
+    return summarizeBillPayment(payment);
   }
 
   // ---------- Nyra VAS discovery (proxied) ----------

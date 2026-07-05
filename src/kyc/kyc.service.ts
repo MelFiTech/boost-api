@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { KycStatus, Prisma } from '@prisma/client';
 import { isKycDevMode } from '../common/utils/kyc-mode.util';
 import { hashSensitiveValue, normalizeNameTokens } from '../common/utils/name-matching.util';
+import { EmailService } from '../emails/email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { NyraApiService } from '../providers/nyra/nyra-api.service';
 import { NyraBvnBasicIdentity, NyraNinIdentity } from '../providers/nyra/nyra.types';
@@ -20,6 +21,7 @@ export class KycService {
     private readonly prisma: PrismaService,
     private readonly nyraApi: NyraApiService,
     private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
   ) {}
 
   isDevMode(): boolean {
@@ -84,6 +86,10 @@ export class KycService {
       create: { userId, ...data },
       update: data,
     });
+
+    if (identity.status === KycStatus.REJECTED) {
+      void this.notifyKycDecision(userId, 'declined', identity.rejectionReason || undefined);
+    }
 
     this.logger.log(
       `KYC submitted for user ${userId} → ${identity.status} (${devMode ? 'dev' : 'prod'})`,
@@ -161,6 +167,7 @@ export class KycService {
     });
 
     this.logger.log(`KYC ${id} approved by ${reviewedBy}`);
+    void this.notifyKycDecision(updated.userId, 'approved');
     return this.toAdminResponse(updated);
   }
 
@@ -185,11 +192,39 @@ export class KycService {
     });
 
     this.logger.log(`KYC ${id} rejected by ${reviewedBy}`);
+    void this.notifyKycDecision(updated.userId, 'declined', reason.trim());
     return this.toAdminResponse(updated);
   }
 
   async revokeKyc(id: string, reviewedBy: string, reason: string, adminNote?: string) {
     return this.rejectKyc(id, reviewedBy, reason || 'KYC approval revoked by admin', adminNote);
+  }
+
+  private async notifyKycDecision(
+    userId: string,
+    status: 'approved' | 'declined',
+    rejectionReason?: string,
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (!user?.email) return;
+
+    try {
+      const result = await this.emailService.sendKycVerificationEmail({
+        email: user.email,
+        userId,
+        status,
+        rejectionReason,
+        reviewedAt: new Date(),
+      });
+      if (result.skipped) {
+        this.logger.debug(`KYC ${status} email skipped for ${userId} (opted out)`);
+      }
+    } catch (error) {
+      this.logger.warn(`KYC ${status} email failed for ${userId}: ${error.message}`);
+    }
   }
 
   private buildDevIdentity(input: SubmitKycInput) {
@@ -229,7 +264,7 @@ export class KycService {
           ninFullName,
           bvnIdentityData: this.sanitizeIdentityData(bvn),
           ninIdentityData: this.sanitizeIdentityData(nin),
-          rejectionReason: 'Could not verify enough name details from BVN/NIN records',
+          rejectionReason: 'Could not verify enough name details from BVN/NIN',
         };
       }
 

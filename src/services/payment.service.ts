@@ -10,12 +10,12 @@ import { NyraWebhookService } from '../providers/nyra/nyra-webhook.service';
 import { WalletService } from '../wallet/wallet.service';
 import { PinService } from '../pin/pin.service';
 import { OrderFulfillmentService } from '../smmstone/order-fulfillment.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 import { WalletTransactionCategory, WalletTransactionType } from '@prisma/client';
 
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
-  private readonly usdtToNgnRate: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -25,11 +25,10 @@ export class PaymentService {
     private readonly walletService: WalletService,
     private readonly pinService: PinService,
     private readonly orderFulfillment: OrderFulfillmentService,
+    private readonly appSettingsService: AppSettingsService,
     @Inject(forwardRef(() => NotificationService))
     private readonly notificationService: NotificationService,
-  ) {
-    this.usdtToNgnRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1612;
-  }
+  ) {}
 
   private newPaymentReference(): string {
     return `pay${randomBytes(8).toString('hex')}`;
@@ -148,8 +147,9 @@ export class PaymentService {
       let exchangeRate = null;
 
       if (paymentMethod === PaymentMethod.CRYPTO) {
-        cryptoAmount = order.price / this.usdtToNgnRate;
-        exchangeRate = this.usdtToNgnRate;
+        const usdtToNgnRate = await this.appSettingsService.getUsdtExchangeRate();
+        cryptoAmount = order.price / usdtToNgnRate;
+        exchangeRate = usdtToNgnRate;
       }
 
       await this.prisma.payment.upsert({
@@ -160,6 +160,9 @@ export class PaymentService {
           gatewayRef: reference,
           cryptoAmount,
           exchangeRate,
+          ...(initiatePaymentDto.email
+            ? { customerEmail: initiatePaymentDto.email.trim().toLowerCase() }
+            : {}),
           updatedAt: new Date(),
         },
         create: {
@@ -171,6 +174,7 @@ export class PaymentService {
           gatewayRef: reference,
           cryptoAmount,
           exchangeRate,
+          customerEmail: initiatePaymentDto.email?.trim().toLowerCase() || null,
         },
       });
 
@@ -236,8 +240,8 @@ export class PaymentService {
           currency: 'USDT',
           network: 'TRC20',
           walletAddress: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
-          exchangeRate: this.usdtToNgnRate,
-          exchangeInfo: `1 USDT = ₦${this.usdtToNgnRate}`,
+          exchangeRate: exchangeRate!,
+          exchangeInfo: `1 USDT = ₦${exchangeRate}`,
           qrCode: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE`,
           expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
           instructions: [

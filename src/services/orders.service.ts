@@ -3,8 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto, PaymentMethod, OrderPlatform, ServiceType } from '../dto/create-order.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { ResendService } from './resend.service';
+import { EmailService } from '../emails/email.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import { resolveOrderReceiptEmail } from './order-receipt.util';
 
 @Injectable()
 export class OrdersService {
@@ -13,7 +14,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-    private readonly resendService: ResendService,
+    private readonly emailService: EmailService,
     private readonly appSettingsService: AppSettingsService,
   ) {}
 
@@ -162,8 +163,10 @@ export class OrdersService {
    * quantities, so users never hit "no service found" errors.
    */
   async getServiceCatalog() {
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
-    const markupPercent = await this.appSettingsService.getSmmMarkupPercent();
+    const [exchangeRate, markupPercent] = await Promise.all([
+      this.appSettingsService.getUsdtExchangeRate(),
+      this.appSettingsService.getSmmMarkupPercent(),
+    ]);
 
     const services = await this.prisma.service.findMany({
       where: { active: true, providerCategory: { not: null } },
@@ -309,7 +312,7 @@ export class OrdersService {
 
     // Convert to requested currency
     let finalPrice = basePriceUSDT;
-    const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
     if (currency === 'NGN') {
       finalPrice = basePriceUSDT * exchangeRate; // USDT to NGN conversion at current exchange rate
     }
@@ -374,7 +377,7 @@ export class OrdersService {
 
       // Convert to requested currency
       let calculatedPrice = basePriceUSDT;
-      const exchangeRate = this.configService.get<number>('USDT_EXCHANGE_RATE') || 1500;
+      const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
       if (createOrderDto.currency === 'NGN') {
         calculatedPrice = basePriceUSDT * exchangeRate; // USDT to NGN conversion at current exchange rate
       }
@@ -450,12 +453,7 @@ export class OrdersService {
         return { order, payment };
       });
 
-      // Send order confirmation email (non-blocking)
-      this.sendOrderStatusEmail(result.order.id, 'pending').catch(error => {
-        this.logger.warn(`Failed to send order confirmation email for order ${result.order.id}:`, error);
-      });
-
-      // Return formatted response
+        // Receipt email is sent after payment confirms, not at order creation.
       return {
         id: result.order.id,
         status: 'pending_payment',
@@ -676,16 +674,23 @@ export class OrdersService {
    */
   private async sendOrderStatusEmail(orderId: string, status: 'pending' | 'processing' | 'completed' | 'cancelled' | 'partial') {
     try {
-      // Get order details with user information
       const order = await this.prisma.order.findUnique({
         where: { id: orderId },
         include: {
           platform: true,
           service: true,
-          payment: true,
-          // Note: We don't have user relationship in Order model yet
-          // For now, we'll skip email sending until user relationship is established
-        }
+          user: { select: { id: true, email: true, username: true } },
+          payment: {
+            select: {
+              customerEmail: true,
+              transactions: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: { customerEmail: true },
+              },
+            },
+          },
+        },
       });
 
       if (!order) {
@@ -693,33 +698,56 @@ export class OrdersService {
         return;
       }
 
-      // TODO: Add user relationship to Order model to get user email
-      // For now, we'll log that we would send an email
-      this.logger.debug(`Would send ${status} email for order ${orderId} (${order.service.name})`);
-
-      // Uncomment when user relationship is added:
-      /*
-      if (order.user?.email) {
-        const emailResult = await this.resendService.sendOrderStatusEmail({
-          email: order.user.email,
-          orderData: {
-            orderId: order.id,
-            serviceName: order.service.name,
-            platform: order.platform.name,
-            quantity: order.quantity,
-            status: status,
-            userName: order.user.name,
-            targetUrl: order.link,
-          }
-        });
-
-        if (emailResult.success) {
-          this.logger.log(`Order status email sent for order ${orderId}. Message ID: ${emailResult.messageId}`);
-        } else {
-          this.logger.error(`Failed to send order status email for order ${orderId}: ${emailResult.error}`);
-        }
+      const recipient = await resolveOrderReceiptEmail(this.prisma, orderId);
+      if (!recipient?.email) {
+        this.logger.debug(`No receipt email on record for order ${orderId}, skipping status email`);
+        return;
       }
-      */
+
+      const { email, userId, userName } = recipient;
+      const baseData = {
+        orderId: order.id,
+        serviceName: order.service.name,
+        platform: order.platform.name,
+        quantity: order.quantity,
+        targetUrl: order.link,
+        userName,
+      };
+
+      let emailResult;
+      if (status === 'completed') {
+        emailResult = await this.emailService.sendOrderCompletionEmail({
+          email,
+          userId,
+          orderData: {
+            ...baseData,
+            completedDate: order.updatedAt,
+            amount: order.price,
+          },
+        });
+      } else {
+        emailResult = await this.emailService.sendOrderStatusEmail({
+          email,
+          userId,
+          orderData: {
+            ...baseData,
+            status,
+            orderDate: order.createdAt,
+          },
+        });
+      }
+
+      if (emailResult.skipped) {
+        this.logger.debug(`Order email skipped for ${orderId} (opted out or dev mode)`);
+      } else if (emailResult.success) {
+        this.logger.log(
+          `Order ${status} email sent for order ${orderId}. Message ID: ${emailResult.messageId}`,
+        );
+      } else {
+        this.logger.error(
+          `Failed to send order status email for order ${orderId}: ${emailResult.error}`,
+        );
+      }
     } catch (error) {
       this.logger.error(`Error sending order status email for order ${orderId}:`, error);
     }

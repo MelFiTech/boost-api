@@ -28,10 +28,18 @@ services:
         sync: false
       - key: BUDPAY_WEBHOOK_SECRET
         sync: false
-      - key: RESEND_API_KEY
+      - key: EMAIL_MODE
+        value: prod
+      - key: ZEPTOMAIL_SMTP_HOST
+        value: smtp.zeptomail.com
+      - key: ZEPTOMAIL_SMTP_PORT
+        value: "587"
+      - key: ZEPTOMAIL_SMTP_USER
+        value: emailapikey
+      - key: ZEPTOMAIL_SMTP_PASS
         sync: false
       - key: FROM_EMAIL
-        value: noreply@melfitech.com
+        value: noreply@boostlab.ng
       - key: FROM_NAME
         value: Boostlab
       - key: EXPO_ACCESS_TOKEN
@@ -54,5 +62,19 @@ services:
         generateValue: true
       - key: LOG_LEVEL
         value: info
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: boostlab
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+      - key: R2_API_TOKEN
+        sync: false
 
  

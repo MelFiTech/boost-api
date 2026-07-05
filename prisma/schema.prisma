@@ -143,6 +143,7 @@ model Payment {
   method       PaymentMethod
   status       PaymentStatus @default(PENDING)
   gatewayRef   String? // Payment gateway reference
+  customerEmail String? // Receipt email from SMM web / payment initiate
   cryptoAmount Decimal?      @db.Decimal(18, 8) // For crypto payments
   exchangeRate Decimal?      @db.Decimal(10, 2) // NGN to crypto rate
   createdAt    DateTime      @default(now())
@@ -440,6 +441,7 @@ model AppSettings {
   fundingFee          Decimal  @default(0) @db.Decimal(14, 2)
   withdrawalFee       Decimal  @default(0) @db.Decimal(14, 2)
   smmMarkupPercent    Decimal  @default(10) @db.Decimal(5, 2) // Markup on SMMStone prices
+  usdtExchangeRate    Decimal  @default(1500) @db.Decimal(10, 2) // USDT to NGN rate (admin-managed)
   smmWebUrl           String? // Hosted Boost (SMM) web flow URL for the mobile app
   updatedBy           String?
   createdAt           DateTime @default(now())

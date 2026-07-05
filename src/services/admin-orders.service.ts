@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LOW_PROVIDER_BALANCE_ISSUE } from '../smmstone/smmstone-balance.util';
 import { OrderFulfillmentService } from '../smmstone/order-fulfillment.service';
 import { WalletService } from '../wallet/wallet.service';
-import { ResendService } from './resend.service';
+import { EmailService } from '../emails/email.service';
 
 /**
  * Admin recovery tooling for the hands-off fulfillment flow. Orders go to
@@ -19,7 +19,7 @@ export class AdminOrdersService {
     private readonly prisma: PrismaService,
     private readonly orderFulfillment: OrderFulfillmentService,
     private readonly walletService: WalletService,
-    private readonly resendService: ResendService,
+    private readonly emailService: EmailService,
   ) {}
 
   /** Paid-but-unsubmitted, failed, or cancelled orders that may need action */
@@ -148,7 +148,7 @@ export class AdminOrdersService {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        user: { select: { email: true } },
+        user: { select: { id: true, email: true } },
         platform: true,
         payment: { include: { transactions: { orderBy: { createdAt: 'desc' }, take: 1 } } },
       },
@@ -157,7 +157,7 @@ export class AdminOrdersService {
 
     // Priority: explicit email → account email → email captured at payment
     const to =
-      email || order.user?.email || order.payment?.transactions[0]?.customerEmail || null;
+      email || order.user?.email || order.payment?.customerEmail || order.payment?.transactions[0]?.customerEmail || null;
     if (!to) {
       throw new BadRequestException('No email on record for this order — provide one explicitly');
     }
@@ -167,11 +167,15 @@ export class AdminOrdersService {
       message ||
       `Hi,\n\nWe're reaching out about your ${order.platform.name} order (${order.quantity.toLocaleString()} units). Our team is looking into it and will make sure it's resolved.\n\nIf you have any questions, just reply to this email.\n\n— BoostLab`;
 
-    const result = await this.resendService.sendCustomEmail(
+    const result = await this.emailService.sendCustomEmail(
       to,
       subject,
       body.replace(/\n/g, '<br/>'),
+      { isHtml: false, userId: order.user?.id },
     );
+    if (result.skipped) {
+      throw new BadRequestException('User has email notifications turned off');
+    }
     if (!result.success) {
       throw new BadRequestException(`Email failed to send: ${result.error}`);
     }

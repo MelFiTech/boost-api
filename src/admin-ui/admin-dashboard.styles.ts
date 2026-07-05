@@ -382,11 +382,18 @@ pre.json {
 }
 .user-pick-item:last-child { border-bottom: none; }
 .selected-users { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.selected-users { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .selected-user-tag {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--lime-soft); color: var(--lime); border-radius: 999px;
   padding: 4px 10px; font-size: .78rem;
 }
+.email-preview-frame {
+  width: 100%; height: 720px; border: 1px solid var(--border); border-radius: 12px;
+  background: #0a0a0a;
+}
+.template-file-list { margin-top: 16px; }
+.template-file-list code { font-size: .78rem; color: var(--lime); }
 .quick-link {
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px; cursor: pointer; text-align: left; color: var(--text);

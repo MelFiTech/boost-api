@@ -178,7 +178,13 @@ export class NyraWebhookService {
     }
 
     const bill = await this.prisma.billPayment.findFirst({
-      where: { providerRef: txnId, billType: 'ELECTRICITY' },
+      where: {
+        billType: 'ELECTRICITY',
+        OR: [
+          { providerRef: txnId },
+          ...(data.reference ? [{ providerRef: data.reference }] : []),
+        ],
+      },
     });
 
     if (!bill) {
@@ -187,20 +193,44 @@ export class NyraWebhookService {
     }
 
     const isDelivered = data.status?.toLowerCase() === 'delivered';
+    const existingMeta = (bill.metadata as { token?: string; billerName?: string } | null) || {};
 
     if (isDelivered) {
+      if (existingMeta.token) {
+        await this.markLog(logId, { processed: true });
+        return { success: true, message: 'Electricity token already delivered' };
+      }
+
       await this.prisma.billPayment.update({
         where: { id: bill.id },
         data: {
           status: TransactionStatus.COMPLETED,
           metadata: {
-            ...(bill.metadata as object),
+            ...existingMeta,
             token: data.token,
             number_of_units: data.number_of_units,
+            provider: data.provider,
             webhook: data as object,
           },
         },
       });
+
+      if (data.token) {
+        void this.notificationService
+          .notifyElectricityTokenDelivered(bill.userId, {
+            billPaymentId: bill.id,
+            token: data.token,
+            meterNumber: data.meter_number || bill.customerIdentifier,
+            amount: data.amount ?? bill.amount.toNumber(),
+            reference: data.transaction_id || txnId,
+            numberOfUnits: data.number_of_units,
+            providerName: data.provider || existingMeta.billerName,
+          })
+          .catch((err) =>
+            this.logger.warn(`Electricity token notify failed: ${err.message}`),
+          );
+      }
+
       await this.markLog(logId, { processed: true });
       return { success: true, message: 'Electricity token delivered' };
     }
@@ -295,7 +325,10 @@ export class NyraWebhookService {
           status: 'COMPLETED',
           budpayStatus: data.status,
           accountNumber: data.credit_account_number,
-          customerEmail: (data.meta?.customer_email as string) || undefined,
+          customerEmail:
+            (data.meta?.customer_email as string) ||
+            payment.customerEmail ||
+            undefined,
           narration: data.sender_name ? `Transfer from ${data.sender_name}` : undefined,
           sessionId: data.sessionId,
           paidAt: data.paid_at ? new Date(data.paid_at) : new Date(),
@@ -322,12 +355,10 @@ export class NyraWebhookService {
       this.logger.error(`Auto-fulfillment after Nyra payment failed: ${err.message}`);
     }
 
-    if (payment.order.userId) {
-      try {
-        await this.notificationService.sendOrderNotification(payment.orderId, 'payment_received');
-      } catch (err) {
-        this.logger.warn(`Payment notification failed: ${err.message}`);
-      }
+    try {
+      await this.notificationService.sendOrderNotification(payment.orderId, 'payment_received');
+    } catch (err) {
+      this.logger.warn(`Payment receipt notification failed: ${err.message}`);
     }
 
     await this.markLog(logId, {

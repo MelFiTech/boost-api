@@ -11,6 +11,7 @@ import {
   WalletTransactionCategory,
   WalletTransactionType,
   BillType,
+  BillPayment,
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { BankAccountsService } from '../bank-accounts/bank-accounts.service';
@@ -21,8 +22,10 @@ import { PinService } from '../pin/pin.service';
 import { NyraTransferService } from '../providers/nyra/nyra-transfer.service';
 import { ProviderRegistryService } from '../providers/provider-registry.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../emails/email.service';
 import { NotificationService } from '../services/notification.service';
 import { WalletGateway } from './wallet.gateway';
+import { summarizeBillPayment } from '../bills/bill-payment-summary.util';
 import { formatTransactionTitle } from './transaction-title.util';
 
 export interface LedgerEntryInput {
@@ -51,6 +54,7 @@ export class WalletService implements OnModuleInit {
     private readonly walletGateway: WalletGateway,
     private readonly appSettingsService: AppSettingsService,
     private readonly notificationService: NotificationService,
+    private readonly emailService: EmailService,
   ) {}
 
   onModuleInit() {
@@ -75,14 +79,11 @@ export class WalletService implements OnModuleInit {
       narration: string | null;
       metadata: Prisma.JsonValue;
       createdAt: Date;
-      billPayment?: {
-        billType: BillType;
-        metadata: Prisma.JsonValue;
-      } | null;
+      billPayment?: BillPayment | null;
     },
   ) {
     const metadata = (tx.metadata || {}) as Record<string, unknown>;
-    const billPayment = tx.billPayment
+    const billPaymentForTitle = tx.billPayment
       ? {
           billType: tx.billPayment.billType,
           metadata: (tx.billPayment.metadata || {}) as Record<string, unknown>,
@@ -102,8 +103,9 @@ export class WalletService implements OnModuleInit {
         category: tx.category,
         narration: tx.narration,
         metadata,
-        billPayment,
+        billPayment: billPaymentForTitle,
       }),
+      billPayment: tx.billPayment ? summarizeBillPayment(tx.billPayment) : null,
       createdAt: tx.createdAt.toISOString(),
     };
   }
@@ -117,6 +119,122 @@ export class WalletService implements OnModuleInit {
     const payload = this.serializeTransaction(tx);
     this.walletGateway.pushTransaction(userId, payload);
     void this.notificationService.notifyWalletTransaction(userId, payload);
+    void this.notifyWalletTransactionEmail(userId, tx);
+  }
+
+  private async notifyWalletTransactionEmail(
+    userId: string,
+    tx: {
+      id: string;
+      type: WalletTransactionType;
+      category: WalletTransactionCategory;
+      amount: Prisma.Decimal;
+      balanceAfter: Prisma.Decimal;
+      reference: string;
+      status: TransactionStatus;
+      narration: string | null;
+      metadata: Prisma.JsonValue;
+      provider: string | null;
+      createdAt: Date;
+      billPayment?: {
+        billType: BillType;
+        metadata: Prisma.JsonValue;
+      } | null;
+    },
+  ) {
+    if (!['COMPLETED', 'PROCESSING'].includes(tx.status)) return;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, username: true },
+    });
+    if (!user?.email) return;
+
+    const userName = user.username || user.email.split('@')[0];
+    const amount = parseFloat(tx.amount.toString());
+    const balanceAfter = parseFloat(tx.balanceAfter.toString());
+    const meta = (tx.metadata || {}) as Record<string, unknown>;
+    const billPayment = tx.billPayment
+      ? {
+          billType: tx.billPayment.billType,
+          metadata: (tx.billPayment.metadata || {}) as Record<string, unknown>,
+        }
+      : null;
+
+    try {
+      switch (tx.category) {
+        case WalletTransactionCategory.FUNDING: {
+          if (tx.status !== TransactionStatus.COMPLETED) return;
+          const gross = (meta.grossAmount as number | undefined) ?? amount;
+          const fee = (meta.platformFee as number | undefined) ?? 0;
+          const credited = (meta.netCredit as number | undefined) ?? amount;
+          await this.emailService.sendWalletTopUpEmail({
+            email: user.email,
+            userId,
+            topUpData: {
+              userName,
+              amount: gross,
+              fee,
+              creditedAmount: credited,
+              reference: tx.reference,
+              date: tx.createdAt,
+              balanceAfter,
+              paymentMethod: tx.provider || 'Bank transfer',
+            },
+          });
+          break;
+        }
+        case WalletTransactionCategory.WITHDRAWAL: {
+          const platformFee = (meta.platformFee as number | undefined) ?? 0;
+          await this.emailService.sendWithdrawalEmail({
+            email: user.email,
+            userId,
+            withdrawalData: {
+              userName,
+              amount: (meta.requestedAmount as number | undefined) ?? amount - platformFee,
+              fee: platformFee,
+              totalDebited: (meta.totalDebited as number | undefined) ?? amount,
+              bankName: (meta.bankName as string | undefined) ?? 'Bank',
+              accountNumber: (meta.accountNumber as string | undefined) ?? '',
+              accountName: (meta.accountName as string | undefined) ?? '',
+              reference: tx.reference,
+              date: tx.createdAt,
+              balanceAfter,
+            },
+          });
+          break;
+        }
+        case WalletTransactionCategory.BILL_PAYMENT:
+        case WalletTransactionCategory.REFUND:
+        case WalletTransactionCategory.ADJUSTMENT: {
+          if (tx.status !== TransactionStatus.COMPLETED) return;
+          await this.emailService.sendTxnSuccessEmail({
+            email: user.email,
+            userId,
+            txnData: {
+              userName,
+              title: formatTransactionTitle({
+                category: tx.category,
+                narration: tx.narration,
+                metadata: meta,
+                billPayment,
+              }),
+              amount,
+              reference: tx.reference,
+              date: tx.createdAt,
+              balanceAfter,
+            },
+          });
+          break;
+        }
+        case WalletTransactionCategory.SMM_ORDER:
+          break;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Wallet email failed for ${userId} (${tx.id}): ${error.message}`,
+      );
+    }
   }
 
   private newReference(prefix: string): string {
