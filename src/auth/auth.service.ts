@@ -3,7 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { EmailService } from '../emails/email.service';
-import { isEmailDevMode } from '../emails/email-mode.util';
+import { isEmailDevMode, isOtpDevMode } from '../emails/email-mode.util';
 import { GeminiService } from '../services/gemini.service';
 
 @Injectable()
@@ -64,8 +64,9 @@ export class AuthService {
         throw new UnauthorizedException('Invalid email format');
       }
 
-      const devMode = isEmailDevMode(this.configService);
-      const otp = devMode ? this.DEV_OTP : this.generateOTP();
+      const emailDevMode = isEmailDevMode(this.configService);
+      const otpDevMode = isOtpDevMode(this.configService);
+      const otp = otpDevMode ? this.DEV_OTP : this.generateOTP();
       const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
 
       // Check if user exists
@@ -101,7 +102,7 @@ export class AuthService {
         },
       });
 
-      if (!devMode) {
+      if (!emailDevMode) {
         const emailResult = await this.emailService.sendOtpEmail({
           email,
           otp,
@@ -118,7 +119,7 @@ export class AuthService {
         this.logger.warn(`Email dev mode: OTP for ${email} is ${this.DEV_OTP} (email not sent)`);
       }
 
-      if (isNewUser && !devMode) {
+      if (isNewUser && !emailDevMode) {
         try {
           await this.emailService.sendWelcomeEmail({
             email,
@@ -133,7 +134,7 @@ export class AuthService {
       return {
         message: 'OTP sent successfully',
         isNewUser,
-        ...(devMode && { otp }),
+        ...(otpDevMode && { otp }),
       };
     } catch (error) {
       this.logger.error(`Error requesting OTP for ${email}:`, error);
@@ -153,8 +154,8 @@ export class AuthService {
         throw new UnauthorizedException('User not found');
       }
 
-      const devMode = isEmailDevMode(this.configService);
-      const isDevOtp = devMode && otp === this.DEV_OTP;
+      const otpDevMode = isOtpDevMode(this.configService);
+      const isDevOtp = otpDevMode && otp === this.DEV_OTP;
 
       if (!isDevOtp) {
         if (!user.otp || !user.otpExpiry) {
