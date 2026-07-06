@@ -372,6 +372,7 @@ export function getAdminDashboardHtml(apiBase: string): string {
   </div>
 
   <div id="modal" class="modal-backdrop hidden"></div>
+  <div id="sidesheet" class="sidesheet-backdrop hidden" onclick="if(event.target===this)closeSidesheet()"></div>
   <div id="toast" class="toast hidden"></div>
 
   <script>${getAdminDashboardScript(base)}</script>

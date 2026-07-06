@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, UseGuards, Param, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Param, Query, NotFoundException, BadRequestException, Req } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
-import { IsNumber, IsOptional, Min, Max } from 'class-validator';
+import { IsNumber, IsOptional, Min, Max, IsString } from 'class-validator';
+import { Request } from 'express';
 import { SMMService } from '../services/smm.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService } from '../services/orders.service';
@@ -10,6 +11,7 @@ import { SmmstoneService } from '../smmstone/smmstone.service';
 import { NotificationService } from '../services/notification.service';
 import { AdminDashboardService, DashboardPeriod } from '../services/admin-dashboard.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import { WalletService } from '../wallet/wallet.service';
 
 class UpdateRatesDto {
   @IsOptional()
@@ -34,6 +36,16 @@ class RatesResponseDto {
   };
 }
 
+class AdminCreditWalletDto {
+  @IsNumber({}, { message: 'Amount must be a number' })
+  @Min(1, { message: 'Amount must be at least ₦1' })
+  amount: number;
+
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
 @ApiTags('admin')
 @Controller('admin')
 export class AdminController {
@@ -46,6 +58,7 @@ export class AdminController {
     private readonly notificationService: NotificationService,
     private readonly adminDashboardService: AdminDashboardService,
     private readonly appSettingsService: AppSettingsService,
+    private readonly walletService: WalletService,
   ) {}
 
   @Get('rates')
@@ -308,8 +321,9 @@ export class AdminController {
     });
 
     // Orders by status
-    const [pendingCount, completedCount, cancelledCount] = await Promise.all([
+    const [pendingCount, processingCount, completedCount, cancelledCount] = await Promise.all([
       this.prisma.order.count({ where: { status: 'PENDING' } }),
+      this.prisma.order.count({ where: { status: 'PROCESSING' } }),
       this.prisma.order.count({ where: { status: 'COMPLETED' } }),
       this.prisma.order.count({ where: { status: 'CANCELLED' } })
     ]);
@@ -353,6 +367,7 @@ export class AdminController {
       })),
       ordersByStatus: {
         pending: pendingCount,
+        processing: processingCount,
         completed: completedCount,
         cancelled: cancelledCount
       },
@@ -368,12 +383,16 @@ export class AdminController {
     description: 'System statistics retrieved successfully'
   })
   async getSystemStats() {
-    // Get actual counts from database
-    const serviceCount = await this.smmService['prisma'].service.count();
-    const platformCount = await this.smmService['prisma'].platform.count();
-    const categoryCount = await this.smmService['prisma'].category.count();
-    const orderCount = await this.smmService['prisma'].order.count();
-    const providerCount = await this.smmService['prisma'].serviceProvider.count();
+    const [serviceCount, platformCount, categoryCount, orderCount, providerCount, markupPercentage, usdtExchangeRate] =
+      await Promise.all([
+        this.prisma.service.count(),
+        this.prisma.platform.count(),
+        this.prisma.category.count(),
+        this.prisma.order.count(),
+        this.prisma.serviceProvider.count(),
+        this.appSettingsService.getSmmMarkupPercent(),
+        this.appSettingsService.getUsdtExchangeRate(),
+      ]);
 
     return {
       services: serviceCount,
@@ -382,8 +401,8 @@ export class AdminController {
       orders: orderCount,
       providers: providerCount,
       rates: {
-        markupPercentage: this.configService.get<number>('SMM_MARKUP_PERCENTAGE') || 30,
-        usdtExchangeRate: await this.appSettingsService.getUsdtExchangeRate(),
+        markupPercentage,
+        usdtExchangeRate,
       }
     };
   }
@@ -1152,6 +1171,79 @@ export class AdminController {
     };
   }
 
+  @Get('orders/:orderId')
+  @ApiOperation({ summary: 'Get a single order with payment details' })
+  async getOrderById(@Param('orderId') orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            username: true,
+          },
+        },
+        service: {
+          include: {
+            platform: true,
+          },
+        },
+        payment: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
+    const markup = await this.appSettingsService.getSmmMarkupPercent();
+
+    return {
+      success: true,
+      order: {
+        id: order.id,
+        status: order.status,
+        platform: order.service?.platform?.name || 'Unknown',
+        serviceName: order.service?.name || 'Unknown Service',
+        quantity: order.quantity,
+        socialUrl: order.link,
+        link: order.link,
+        providerOrderId: order.providerOrderId,
+        fulfillmentError: order.fulfillmentError,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        user: order.user
+          ? {
+              id: order.user.id,
+              email: order.user.email,
+              username: order.user.username,
+            }
+          : null,
+        pricing: {
+          amountNGN: parseFloat(order.price.toString()),
+          amountUSDT: parseFloat((order.price / exchangeRate).toFixed(4)),
+          providerRateUSDT: order.service?.providerRate || 0,
+          markup,
+          exchangeRate,
+        },
+        payment: order.payment
+          ? {
+              id: order.payment.id,
+              status: order.payment.status,
+              method: order.payment.method,
+              amountPaid: order.payment.amount,
+              currency: order.payment.currency,
+              gatewayRef: order.payment.gatewayRef,
+              paidAt: order.payment.updatedAt,
+              createdAt: order.payment.createdAt,
+            }
+          : null,
+      },
+    };
+  }
+
   // Helper method to calculate estimated completion time
   private calculateEstimatedCompletion(startTime: Date, progressPercentage: number): Date | null {
     if (progressPercentage <= 0) return null;
@@ -1257,23 +1349,58 @@ export class AdminController {
         take: pageSize,
         orderBy,
         include: {
-          orders: {
-            include: {
-              payment: true
-            }
-          }
-        }
+          wallet: { select: { balance: true, currency: true } },
+        },
       }),
       this.prisma.user.count({ where })
     ]);
 
+    const userIds = users.map((user) => user.id);
     const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
-    const usersWithStats = users.map(user => {
-      const totalOrders = user.orders.length;
-      const completedOrders = user.orders.filter(order => order.status === 'COMPLETED');
-      const totalSpent = completedOrders.reduce((sum, order) => sum + parseFloat(order.price.toString()), 0);
-      const lastOrder = user.orders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    let spentByUser = new Map<string, number>();
+    let countByUser = new Map<string, { total: number; completed: number; pending: number }>();
+    let lastOrderByUser = new Map<string, Date>();
+
+    if (userIds.length > 0) {
+      const [completedAgg, statusCounts, lastOrders] = await Promise.all([
+        this.prisma.order.groupBy({
+          by: ['userId'],
+          where: { userId: { in: userIds }, status: 'COMPLETED' },
+          _sum: { price: true },
+        }),
+        this.prisma.order.groupBy({
+          by: ['userId', 'status'],
+          where: { userId: { in: userIds } },
+          _count: { _all: true },
+        }),
+        this.prisma.order.findMany({
+          where: { userId: { in: userIds } },
+          orderBy: { createdAt: 'desc' },
+          distinct: ['userId'],
+          select: { userId: true, createdAt: true },
+        }),
+      ]);
+
+      spentByUser = new Map(
+        completedAgg.map((row) => [row.userId, parseFloat((row._sum.price ?? 0).toString())]),
+      );
+
+      for (const row of statusCounts) {
+        const current = countByUser.get(row.userId) || { total: 0, completed: 0, pending: 0 };
+        current.total += row._count._all;
+        if (row.status === 'COMPLETED') current.completed = row._count._all;
+        if (row.status === 'PENDING') current.pending = row._count._all;
+        countByUser.set(row.userId, current);
+      }
+
+      lastOrderByUser = new Map(lastOrders.map((row) => [row.userId, row.createdAt]));
+    }
+
+    const usersWithStats = users.map((user) => {
+      const counts = countByUser.get(user.id) || { total: 0, completed: 0, pending: 0 };
+      const totalSpent = spentByUser.get(user.id) || 0;
+      const walletBalance = user.wallet ? parseFloat(user.wallet.balance.toString()) : 0;
 
       return {
         id: user.id,
@@ -1283,12 +1410,14 @@ export class AdminController {
         isGuest: user.isGuest,
         pushNotifications: user.pushNotifications,
         emailNotifications: user.emailNotifications,
-        totalOrders,
-        completedOrders: completedOrders.length,
-        pendingOrders: user.orders.filter(order => order.status === 'PENDING').length,
+        walletBalance,
+        walletCurrency: user.wallet?.currency || 'NGN',
+        totalOrders: counts.total,
+        completedOrders: counts.completed,
+        pendingOrders: counts.pending,
         totalSpent: parseFloat(totalSpent.toFixed(2)),
         totalSpentUSDT: parseFloat((totalSpent / exchangeRate).toFixed(4)),
-        lastOrderDate: lastOrder?.createdAt || null,
+        lastOrderDate: lastOrderByUser.get(user.id) || null,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       };
@@ -1391,8 +1520,10 @@ export class AdminController {
     });
 
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundException('User not found');
     }
+
+    const wallet = await this.walletService.getWallet(userId);
 
     const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
 
@@ -1454,9 +1585,41 @@ export class AdminController {
           favoritePlatform
         },
         recentOrders,
+        wallet: {
+          balance: parseFloat(wallet.balance),
+          currency: wallet.currency,
+        },
         deviceTokens: user.deviceTokens.length,
         recentNotifications: user.notifications.length
       }
+    };
+  }
+
+  @Post('users/:userId/wallet/credit')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Credit a user wallet (admin adjustment)' })
+  async creditUserWallet(
+    @Param('userId') userId: string,
+    @Body() body: AdminCreditWalletDto,
+    @Req() req: Request & { user?: { email?: string } },
+  ) {
+    const transaction = await this.walletService.creditWalletFromAdmin(
+      userId,
+      body.amount,
+      body.reason,
+      req.user?.email,
+    );
+    const wallet = await this.walletService.getWallet(userId);
+
+    return {
+      success: true,
+      message: 'Wallet credited successfully',
+      data: {
+        reference: transaction.reference,
+        amount: parseFloat(transaction.amount.toString()),
+        balanceAfter: parseFloat(wallet.balance),
+        currency: wallet.currency,
+      },
     };
   }
 

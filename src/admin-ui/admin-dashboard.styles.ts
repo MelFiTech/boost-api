@@ -297,6 +297,40 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
   padding: 18px 20px; border-bottom: 1px solid var(--border);
 }
 .modal-body { padding: 20px; }
+.sidesheet-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(2px);
+  z-index: 110; display: flex; justify-content: flex-end;
+}
+.sidesheet {
+  width: 100%; max-width: 480px; height: 100%;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px rgba(0,0,0,.35);
+  display: flex; flex-direction: column;
+  animation: sidesheet-in .22s ease;
+}
+@keyframes sidesheet-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.sidesheet-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 20px 22px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.sidesheet-head h3 { font-size: 1.05rem; font-weight: 650; line-height: 1.3; }
+.sidesheet-head .cell-sub { margin-top: 4px; }
+.sidesheet-body { flex: 1; overflow: auto; padding: 20px 22px 28px; }
+.sidesheet-section {
+  background: #0a0a0a; border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; margin-bottom: 16px;
+}
+.sidesheet-section h4 {
+  font-size: 0.88rem; font-weight: 650; margin-bottom: 12px;
+}
+.wallet-balance-pill {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  background: var(--lime-soft); color: var(--lime);
+  border-radius: 10px; padding: 10px 14px; font-weight: 700; font-size: 1.1rem;
+}
 .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
 .detail-grid .full { grid-column: 1 / -1; }
 pre.json {

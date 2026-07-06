@@ -12,6 +12,7 @@ export function getAdminDashboardScript(apiBase: string): string {
   let webhooksPage = 1;
   let pushSelectedUsers = [];
   let pushTemplates = [];
+  let activeUserId = '';
   let sidebarCollapsed = localStorage.getItem('boost_admin_sidebar') === 'collapsed';
   let dashboardPeriod = localStorage.getItem('boost_admin_period') || 'week';
   let dashboardStart = localStorage.getItem('boost_admin_range_start') || '';
@@ -61,12 +62,32 @@ export function getAdminDashboardScript(apiBase: string): string {
     setTimeout(() => hide(el), 3500);
   }
 
+  function parseApiError(data, fallback) {
+    if (!data) return fallback;
+    if (typeof data.message === 'string') return data.message;
+    if (Array.isArray(data.message)) return data.message[0] || fallback;
+    if (typeof data.error === 'string') return data.error;
+    return fallback;
+  }
+
+  function errorMessage(err, fallback) {
+    if (err instanceof Error) return err.message;
+    return parseApiError(err, fallback);
+  }
+
   async function apiFetch(path, options) {
     const headers = { 'Content-Type': 'application/json', ...(options && options.headers || {}) };
     if (token) headers.Authorization = 'Bearer ' + token;
     const res = await fetch(API + path, { ...(options || {}), headers });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || (Array.isArray(data.message) ? data.message[0] : null) || res.statusText || 'Request failed');
+    if (res.status === 401) {
+      token = '';
+      localStorage.removeItem('boost_admin_token');
+      hide($('appView'));
+      show($('loginView'));
+      throw new Error('Session expired — sign in again');
+    }
+    if (!res.ok) throw new Error(parseApiError(data, res.statusText || 'Request failed'));
     return data;
   }
 
@@ -222,26 +243,42 @@ export function getAdminDashboardScript(apiBase: string): string {
   // ─── Dashboard ───────────────────────────────────────────────
   async function loadDashboard() {
     syncPeriodUi();
-    $('dashboardMetrics').innerHTML = '<div class="loading">Loading metrics…</div>';
-    $('volumeBreakdownBody').innerHTML = '<div class="loading">Loading…</div>';
-    $('feesBreakdownBody').innerHTML = '<div class="loading">Loading…</div>';
-    $('recentOrdersBody').innerHTML = '<div class="loading">Loading…</div>';
-    $('platformHealthBody').innerHTML = '<div class="loading">Loading…</div>';
-    try {
-      const [analytics, stats, metrics, providers, attentionRes] = await Promise.all([
-        apiFetch('/admin/dashboard/analytics' + analyticsQuery()),
-        apiFetch('/admin/dashboard/stats'),
-        apiFetch('/admin/dashboard/metrics'),
-        apiFetch('/admin/providers').catch(() => ({ data: {} })),
-        apiFetch('/admin/orders/attention').catch(() => ({ data: [] })),
-      ]);
+    const loading = '<div class="loading">Loading…</div>';
+    $('dashboardMetrics').innerHTML = loading;
+    $('volumeBreakdownBody').innerHTML = loading;
+    $('feesBreakdownBody').innerHTML = loading;
+    $('recentOrdersBody').innerHTML = loading;
+    $('platformHealthBody').innerHTML = loading;
+    $('orderStatusBars').innerHTML = loading;
 
-      const attentionList = attentionRes.data || [];
-      const attentionCount = attentionList.length;
-      window.__attentionLowBalanceCount = attentionList.filter((o) => o.issue === 'LOW_PROVIDER_BALANCE').length;
-      updateAttentionBadge(attentionCount);
-      renderAttentionBanner(attentionCount);
+    const [analyticsRes, statsRes, metricsRes, providersRes, attentionRes] = await Promise.allSettled([
+      apiFetch('/admin/dashboard/analytics' + analyticsQuery()),
+      apiFetch('/admin/dashboard/stats'),
+      apiFetch('/admin/dashboard/metrics'),
+      apiFetch('/admin/providers'),
+      apiFetch('/admin/orders/attention'),
+    ]);
 
+    const analytics = analyticsRes.status === 'fulfilled' ? analyticsRes.value : null;
+    const stats = statsRes.status === 'fulfilled' ? statsRes.value : {};
+    const metrics = metricsRes.status === 'fulfilled' ? metricsRes.value : {};
+    const providers = providersRes.status === 'fulfilled' ? providersRes.value : { data: {} };
+    const attentionResVal = attentionRes.status === 'fulfilled' ? attentionRes.value : { data: [] };
+
+    if (!analytics) {
+      $('dashboardMetrics').innerHTML = errHtml(null, errorMessage(analyticsRes.reason, 'Failed to load analytics'));
+      $('volumeBreakdownBody').innerHTML = errHtml(null, 'Analytics unavailable');
+      $('feesBreakdownBody').innerHTML = errHtml(null, 'Analytics unavailable');
+      $('platformHealthBody').innerHTML = errHtml(null, 'Analytics unavailable');
+    }
+
+    const attentionList = attentionResVal.data || [];
+    const attentionCount = attentionList.length;
+    window.__attentionLowBalanceCount = attentionList.filter((o) => o.issue === 'LOW_PROVIDER_BALANCE').length;
+    updateAttentionBadge(attentionCount);
+    renderAttentionBanner(attentionCount);
+
+    if (analytics) {
       const a = analytics;
       const range = a.range || {};
       const prov = a.providers || {};
@@ -254,6 +291,7 @@ export function getAdminDashboardScript(apiBase: string): string {
       const fees = a.fees || {};
       const volume = a.volume || {};
       const orders = a.orders || {};
+      const periodSuffix = range.label ? ' · ' + range.label : '';
 
       if ($('periodLabel')) {
         $('periodLabel').textContent = 'Showing: ' + (range.label || dashboardPeriod);
@@ -263,21 +301,21 @@ export function getAdminDashboardScript(apiBase: string): string {
       const nyraUnsettled = nyraMaster.error ? '—' : money(nyraMaster.unsettledBalance ?? 0);
 
       $('dashboardMetrics').innerHTML =
-        metricCard('Nyra settled', nyraSettled, 'provider accent') +
-        metricCard('Nyra unsettled', nyraUnsettled, 'provider') +
+        metricCard('Nyra settled', nyraSettled, 'provider accent', 'Live provider balance') +
+        metricCard('Nyra unsettled', nyraUnsettled, 'provider', 'Pending T+1 settlement') +
         smmstoneMetricCard(smm) +
-        metricCard('User wallets', money(wallets.totalBalance), 'wallet') +
-        metricCard('Users', String(users.total || 0)) +
-        metricCard('Transactions', String(txns.walletTxCount || 0)) +
-        metricCard('Fees', money(fees.total), 'fees accent') +
-        metricCard('Revenue', money(volume.orderRevenue), 'accent') +
-        metricCard('Funding', money(volume.walletFunding)) +
-        metricCard('Bills', money(volume.billPayments)) +
-        metricCard('Withdrawals', money(volume.withdrawals)) +
-        metricCard('Gross volume', money(volume.grossVolume)) +
-        metricCard('Open orders', String((orders.pending || 0) + (orders.processing || 0))) +
-        metricCard('Needs attention', String(attentionCount), attentionCount > 0 ? 'accent' : '') +
-        metricCard('Services', String(stats.services || 0));
+        metricCard('User wallets', money(wallets.totalBalance), 'wallet', wallets.activeWithBalance + ' wallets with balance') +
+        metricCard('Users', String(users.total || 0), '', (users.newInPeriod || 0) + ' new' + periodSuffix) +
+        metricCard('Wallet txns', String(txns.walletTxCount || 0), '', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Fees', money(fees.total), 'fees accent', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Order revenue', money(volume.orderRevenue), 'accent', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Funding', money(volume.walletFunding), '', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Bills', money(volume.billPayments), '', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Withdrawals', money(volume.withdrawals), '', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Gross volume', money(volume.grossVolume), '', periodSuffix.replace(' · ', '') || 'In period') +
+        metricCard('Open orders', String((orders.pending || 0) + (orders.processing || 0)), '', 'Pending + processing now') +
+        metricCard('Needs attention', String(attentionCount), attentionCount > 0 ? 'accent' : '', 'Paid but stuck') +
+        metricCard('Services', String(stats.services || 0), '', 'Active catalog size');
 
       $('volumeBreakdownBody').innerHTML = '<div class="health-grid">' +
         '<div class="health-item"><span>Order revenue</span><strong>' + money(volume.orderRevenue) + '</strong></div>' +
@@ -287,6 +325,7 @@ export function getAdminDashboardScript(apiBase: string): string {
         '<div class="health-item"><span>Withdrawals</span><strong>' + money(volume.withdrawals) + '</strong></div>' +
         '<div class="health-item"><span>Gross volume</span><strong>' + money(volume.grossVolume) + '</strong></div>' +
         '<div class="health-item"><span>Orders created</span><strong>' + (orders.createdInPeriod || 0) + '</strong></div>' +
+        '<div class="health-item"><span>Completed in period</span><strong>' + (orders.completedInPeriod || 0) + '</strong></div>' +
         '<div class="health-item"><span>Legacy payment txns</span><strong>' + (txns.legacyPaymentTxCount || 0) + '</strong></div>' +
         '</div>';
 
@@ -296,16 +335,9 @@ export function getAdminDashboardScript(apiBase: string): string {
         '<div class="health-item"><span>Funding fees</span><strong>' + money(fees.fundingFees) + '</strong></div>' +
         '<div class="health-item"><span>Withdrawal fees</span><strong>' + money(fees.withdrawalFees) + '</strong></div>' +
         '<div class="health-item"><span>Verified users</span><strong>' + (users.verified || 0) + '</strong></div>' +
+        '<div class="health-item"><span>Pending KYC</span><strong>' + (users.pendingKyc || 0) + '</strong></div>' +
         '<div class="health-item"><span>Exchange rate</span><strong>₦' + (a.exchangeRate || stats.exchangeRate || 1500) + '/USDT</strong></div>' +
         '</div>';
-
-      const byStatus = metrics.ordersByStatus || {};
-      const total = Math.max(1, (byStatus.pending || 0) + (byStatus.completed || 0) + (byStatus.cancelled || 0));
-      $('orderStatusBars').innerHTML = ['pending','completed','cancelled'].map((key) => {
-        const val = byStatus[key] || 0;
-        const pct = Math.round((val / total) * 100);
-        return '<div class="status-row"><span>' + key + '</span><div class="status-track"><div class="status-fill" style="width:' + pct + '%"></div></div><span>' + val + '</span></div>';
-      }).join('');
 
       const pData = providers.data || {};
       const activeFunding = (pData.configs || []).find((c) => c.kind === 'FUNDING' && c.active);
@@ -319,18 +351,26 @@ export function getAdminDashboardScript(apiBase: string): string {
         '<div class="health-item"><span>Bills provider</span><strong>' + (activeBills?.provider || '—') + '</strong></div>' +
         '<div class="health-item"><span>Nyra VA rail</span><strong>' + (pData.nyraFundingRail || '—') + '</strong></div>' +
         '<div class="health-item"><span>Float accounts</span><strong>' + (nyraFloat.walletCount || 0) + '</strong></div>' +
-        '<div class="health-item"><span>Total revenue (all time)</span><strong>' + money(stats.totalRevenue) + '</strong></div>' +
+        '<div class="health-item"><span>All-time order revenue</span><strong>' + money(stats.totalRevenue) + '</strong></div>' +
         '</div>';
-
-      const recent = metrics.recentOrders || [];
-      $('recentOrdersBody').innerHTML = recent.length ? (
-        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Service</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>' +
-        recent.map((o) => '<tr><td class="cell-title">' + shortId(o.id) + '</td><td><div class="cell-title">' + (o.service || '—') + '</div><div class="cell-sub">' + (o.platform || '') + '</div></td><td>' + money(o.amount) + '</td><td>' + badge(o.status) + '</td><td class="muted">' + fmtDate(o.createdAt) + '</td></tr>').join('') +
-        '</tbody></table></div>'
-      ) : '<div class="empty">No recent orders</div>';
-    } catch (e) {
-      $('dashboardMetrics').innerHTML = errHtml(null, e.message);
+    } else if (providersRes.status === 'rejected') {
+      $('platformHealthBody').innerHTML = errHtml(null, errorMessage(providersRes.reason, 'Providers unavailable'));
     }
+
+    const byStatus = metrics.ordersByStatus || {};
+    const statusTotal = Math.max(1, (byStatus.pending || 0) + (byStatus.processing || 0) + (byStatus.completed || 0) + (byStatus.cancelled || 0));
+    $('orderStatusBars').innerHTML = ['pending','processing','completed','cancelled'].map((key) => {
+      const val = byStatus[key] || 0;
+      const pct = Math.round((val / statusTotal) * 100);
+      return '<div class="status-row"><span>' + key + '</span><div class="status-track"><div class="status-fill" style="width:' + pct + '%"></div></div><span>' + val + '</span></div>';
+    }).join('');
+
+    const recent = metrics.recentOrders || [];
+    $('recentOrdersBody').innerHTML = recent.length ? (
+      '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Service</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>' +
+      recent.map((o) => '<tr><td class="cell-title">' + shortId(o.id) + '</td><td><div class="cell-title">' + (o.service || '—') + '</div><div class="cell-sub">' + (o.platform || '') + '</div></td><td>' + money(o.amount) + '</td><td>' + badge(o.status) + '</td><td class="muted">' + fmtDate(o.createdAt) + '</td></tr>').join('') +
+      '</tbody></table></div>'
+    ) : '<div class="empty">No recent orders</div>';
   }
 
   // ─── Orders ──────────────────────────────────────────────────
@@ -496,12 +536,8 @@ export function getAdminDashboardScript(apiBase: string): string {
 
   window.openOrder = async function(id) {
     try {
-      const allRes = await apiFetch('/admin/orders').catch(() => ({ orders: [] }));
-      let o = (allRes.orders || []).find((x) => x.id === id);
-      if (!o) {
-        const pending = await apiFetch('/admin/orders/pending').catch(() => ({ orders: [] }));
-        o = (pending.orders || []).find((x) => x.id === id);
-      }
+      const res = await apiFetch('/admin/orders/' + id);
+      const o = res.order;
       if (!o) { toast('Order not found', true); return; }
       const user = o.user || {};
       const pricing = o.pricing || {};
@@ -580,10 +616,11 @@ export function getAdminDashboardScript(apiBase: string): string {
     $('smmstoneBody').innerHTML = '<div class="loading">Loading…</div>';
     $('systemStatsBody').innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const [balance, stats, nyraWallet] = await Promise.all([
+      const [balance, stats, nyraWallet, rates] = await Promise.all([
         apiFetch('/admin/smmstone/balance').catch((e) => ({ success: false, error: e.message })),
         apiFetch('/admin/stats'),
         apiFetch('/admin/providers/nyra/wallet-balance').catch((e) => ({ success: false, error: e.message })),
+        apiFetch('/admin/rates').catch(() => null),
       ]);
       const bal = balance.data || {};
       const nyra = nyraWallet.data || {};
@@ -634,10 +671,12 @@ export function getAdminDashboardScript(apiBase: string): string {
       };
       $('refreshBalanceBtn').onclick = () => loadIntegrations();
 
-      const rates = stats.rates || {};
+      const ratesInfo = (stats.rates || {});
+      const markupPct = rates?.markupPercentage ?? ratesInfo.markupPercentage ?? 0;
+      const usdtRate = rates?.usdtExchangeRate ?? ratesInfo.usdtExchangeRate ?? 1500;
       $('systemStatsBody').innerHTML = '<div class="health-grid">' +
-        '<div class="health-item"><span>Markup</span><strong>' + (rates.markupPercentage || 10) + '%</strong></div>' +
-        '<div class="health-item"><span>USDT rate</span><strong>₦' + (rates.usdtExchangeRate || 1500) + '</strong></div>' +
+        '<div class="health-item"><span>Markup</span><strong>' + markupPct + '%</strong></div>' +
+        '<div class="health-item"><span>USDT rate</span><strong>₦' + usdtRate + '</strong></div>' +
         '<div class="health-item"><span>Platforms</span><strong>' + (stats.platforms || 0) + '</strong></div>' +
         '<div class="health-item"><span>Categories</span><strong>' + (stats.categories || 0) + '</strong></div>' +
         '</div><button class="btn btn-ghost btn-sm" style="margin-top:14px" onclick="setPage(\\'pricing\\')">Edit rates →</button>';
@@ -662,8 +701,8 @@ export function getAdminDashboardScript(apiBase: string): string {
       const users = res.users || [];
       const pag = res.pagination || {};
       $('usersTableWrap').innerHTML = users.length ? (
-        '<div class="table-wrap"><table class="data-table"><thead><tr><th>User</th><th>Verified</th><th>Orders</th><th>Spent</th><th>Last order</th><th>Joined</th><th></th></tr></thead><tbody>' +
-        users.map((u) => '<tr><td><div class="cell-title">' + (u.username || '—') + '</div><div class="cell-sub">' + (u.email || '') + (u.isGuest ? ' · guest' : '') + '</div></td><td>' + badge(u.isVerified ? 'VERIFIED' : 'PENDING') + '</td><td>' + (u.totalOrders || 0) + ' <span class="muted">(' + (u.completedOrders || 0) + ' done)</span></td><td>' + money(u.totalSpent) + '</td><td class="muted">' + fmtDate(u.lastOrderDate) + '</td><td class="muted">' + fmtDate(u.createdAt) + '</td><td><button class="btn btn-ghost btn-sm" onclick="openUser(\\'' + u.id + '\\')">Details</button></td></tr>').join('') +
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>User</th><th>Wallet</th><th>Verified</th><th>Orders</th><th>Spent</th><th>Last order</th><th>Joined</th><th></th></tr></thead><tbody>' +
+        users.map((u) => '<tr><td><div class="cell-title">' + (u.username || '—') + '</div><div class="cell-sub">' + (u.email || '') + (u.isGuest ? ' · guest' : '') + '</div></td><td><strong style="color:var(--lime)">' + money(u.walletBalance) + '</strong></td><td>' + badge(u.isVerified ? 'VERIFIED' : 'PENDING') + '</td><td>' + (u.totalOrders || 0) + ' <span class="muted">(' + (u.completedOrders || 0) + ' done)</span></td><td>' + money(u.totalSpent) + '</td><td class="muted">' + fmtDate(u.lastOrderDate) + '</td><td class="muted">' + fmtDate(u.createdAt) + '</td><td><button class="btn btn-ghost btn-sm" onclick="openUser(\\'' + u.id + '\\')">Details</button></td></tr>').join('') +
         '</tbody></table></div>' +
         '<div class="pagination"><span class="muted">Page ' + (pag.currentPage || 1) + ' of ' + (pag.totalPages || 1) + ' · ' + (pag.totalUsers || users.length) + ' users</span>' +
         '<div class="toolbar">' +
@@ -681,26 +720,83 @@ export function getAdminDashboardScript(apiBase: string): string {
     loadUsers();
   };
 
-  window.openUser = async function(id) {
-    try {
-      const res = await apiFetch('/admin/users/' + id);
-      const u = res.user || {};
-      const stats = u.statistics || {};
-      const orders = u.recentOrders || [];
-      $('modal').innerHTML = '<div class="modal"><div class="modal-head"><h3>' + (u.username || u.email) + '</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button></div><div class="modal-body">' +
+
+  window.closeSidesheet = function() {
+    hide($('sidesheet'));
+    $('sidesheet').innerHTML = '';
+    activeUserId = '';
+  };
+
+  function openSidesheet(html) {
+    $('sidesheet').innerHTML = '<div class="sidesheet" onclick="event.stopPropagation()">' + html + '</div>';
+    show($('sidesheet'));
+  }
+
+  function renderUserSidesheet(u) {
+    const stats = u.statistics || {};
+    const orders = u.recentOrders || [];
+    const wallet = u.wallet || {};
+    return (
+      '<div class="sidesheet-head">' +
+        '<div><h3>' + (u.username || u.email || 'User') + '</h3><div class="cell-sub muted">' + (u.email || '—') + '</div></div>' +
+        '<button class="btn btn-ghost btn-sm" onclick="closeSidesheet()">Close</button>' +
+      '</div>' +
+      '<div class="sidesheet-body">' +
+        '<div class="sidesheet-section">' +
+          '<h4>Wallet</h4>' +
+          '<div class="wallet-balance-pill" id="userWalletBalance">' + money(wallet.balance) + '</div>' +
+          '<p class="muted" style="margin-top:10px;font-size:.82rem">Credit this wallet instantly. The user gets a push notification.</p>' +
+          '<label class="field-label" style="margin-top:14px">Amount (NGN)</label>' +
+          '<input class="input" id="walletCreditAmount" type="number" min="1" step="1" placeholder="e.g. 5000" />' +
+          '<label class="field-label">Reason (optional)</label>' +
+          '<textarea class="textarea" id="walletCreditReason" placeholder="Why is this wallet being credited?" style="min-height:72px"></textarea>' +
+          '<div class="toolbar" style="margin-top:12px">' +
+            '<button class="btn btn-primary btn-sm" onclick="submitWalletCredit(\\'' + u.id + '\\')">Credit wallet</button>' +
+          '</div>' +
+        '</div>' +
         '<div class="detail-grid">' +
-        '<div><div class="field-label">Email</div><div>' + (u.email || '—') + '</div></div>' +
-        '<div><div class="field-label">Verified</div>' + badge(u.isVerified ? 'VERIFIED' : 'PENDING') + '</div>' +
-        '<div><div class="field-label">Total orders</div><div>' + (stats.totalOrders || 0) + '</div></div>' +
-        '<div><div class="field-label">Total spent</div><div>' + money(stats.totalSpent) + '</div></div>' +
-        '<div><div class="field-label">Favorite platform</div><div>' + (stats.favoritePlatform || '—') + '</div></div>' +
-        '<div><div class="field-label">Device tokens</div><div>' + (u.deviceTokens || 0) + '</div></div>' +
-        '</div><div class="field-label">Recent orders</div>' +
+          '<div><div class="field-label">Verified</div>' + badge(u.isVerified ? 'VERIFIED' : 'PENDING') + '</div>' +
+          '<div><div class="field-label">Total orders</div><div>' + (stats.totalOrders || 0) + '</div></div>' +
+          '<div><div class="field-label">Total spent</div><div>' + money(stats.totalSpent) + '</div></div>' +
+          '<div><div class="field-label">Favorite platform</div><div>' + (stats.favoritePlatform || '—') + '</div></div>' +
+          '<div><div class="field-label">Device tokens</div><div>' + (u.deviceTokens || 0) + '</div></div>' +
+        '</div>' +
+        '<div class="field-label">Recent orders</div>' +
         (orders.length ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Service</th><th>Amount</th><th>Status</th></tr></thead><tbody>' +
         orders.map((o) => '<tr><td>' + shortId(o.id) + '</td><td>' + (o.serviceName || o.service || '—') + '</td><td>' + money(o.amountNGN || o.amount) + '</td><td>' + badge(o.status) + '</td></tr>').join('') +
         '</tbody></table></div>' : '<div class="empty">No orders</div>') +
-        '</div></div>';
-      show($('modal'));
+      '</div>'
+    );
+  }
+
+  window.openUser = async function(id) {
+    try {
+      activeUserId = id;
+      const res = await apiFetch('/admin/users/' + id);
+      openSidesheet(renderUserSidesheet(res.user || {}));
+    } catch (e) { toast(e.message, true); }
+  };
+
+  window.submitWalletCredit = async function(userId) {
+    const amountInput = $('walletCreditAmount');
+    const reasonInput = $('walletCreditReason');
+    const amount = Number((amountInput || {}).value);
+    const reason = ((reasonInput || {}).value || '').trim();
+    if (!amount || amount < 1) {
+      toast('Enter a valid amount', true);
+      return;
+    }
+    try {
+      const res = await apiFetch('/admin/users/' + userId + '/wallet/credit', {
+        method: 'POST',
+        body: JSON.stringify({ amount, reason: reason || undefined }),
+      });
+      toast('Wallet credited · ' + money(res.data && res.data.amount));
+      if (amountInput) amountInput.value = '';
+      if (reasonInput) reasonInput.value = '';
+      const balanceEl = $('userWalletBalance');
+      if (balanceEl && res.data) balanceEl.textContent = money(res.data.balanceAfter);
+      loadUsers();
     } catch (e) { toast(e.message, true); }
   };
 
@@ -1292,11 +1388,18 @@ export function getAdminDashboardScript(apiBase: string): string {
   window.setPage = setPage;
 
   // ─── Auth & events ───────────────────────────────────────────
-  function showApp() {
+  async function showApp() {
     hide($('loginView'));
     show($('appView'));
     applySidebar();
-    setPage('dashboard');
+    try {
+      await apiFetch('/admin/dashboard/stats');
+      setPage('dashboard');
+    } catch (err) {
+      hide($('appView'));
+      show($('loginView'));
+      $('loginError').textContent = err.message || 'Session expired';
+    }
   }
 
   $('loginForm').addEventListener('submit', async (e) => {
@@ -1414,6 +1517,10 @@ export function getAdminDashboardScript(apiBase: string): string {
   });
 
   if (token) showApp();
+  else {
+    hide($('appView'));
+    show($('loginView'));
+  }
 })();
 `;
 }

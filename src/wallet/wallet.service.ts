@@ -12,6 +12,7 @@ import {
   WalletTransactionType,
   BillType,
   BillPayment,
+  NotificationType,
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { BankAccountsService } from '../bank-accounts/bank-accounts.service';
@@ -338,21 +339,18 @@ export class WalletService implements OnModuleInit {
   }
 
   /**
-   * Starts a wallet funding: creates a PENDING credit row and asks the
-   * active funding provider for account details the user should pay into.
+   * Starts wallet funding: `amount` is the net credit the user wants.
+   * The dynamic VA is created for amount + platform fee (gross payable).
    */
   async initiateFunding(userId: string, amount: number, email: string) {
     const { fundingFee } = await this.appSettingsService.getWalletFees();
-    if (amount <= fundingFee) {
-      throw new BadRequestException(
-        `Amount must be greater than the funding fee of ₦${fundingFee.toLocaleString('en-NG')}`,
-      );
-    }
-    const netCredit = parseFloat((amount - fundingFee).toFixed(2));
+    const netCredit = parseFloat(amount.toFixed(2));
+    const grossAmount = parseFloat((netCredit + fundingFee).toFixed(2));
 
-    if (amount < 300) {
+    if (netCredit < 300) {
       throw new BadRequestException('Minimum funding amount is ₦300');
     }
+
     const wallet = await this.getOrCreateWallet(userId);
     const provider = await this.providerRegistry.getFundingProvider();
     const reference = this.newReference('wf');
@@ -363,7 +361,7 @@ export class WalletService implements OnModuleInit {
     });
 
     const account = await provider.createFundingAccount({
-      amount,
+      amount: grossAmount,
       currency: wallet.currency,
       reference,
       customerEmail: email || user?.email || 'customer@boostlab.com',
@@ -375,7 +373,7 @@ export class WalletService implements OnModuleInit {
         walletId: wallet.id,
         type: WalletTransactionType.CREDIT,
         category: WalletTransactionCategory.FUNDING,
-        amount: new Prisma.Decimal(amount.toFixed(2)),
+        amount: new Prisma.Decimal(grossAmount.toFixed(2)),
         balanceBefore: wallet.balance,
         balanceAfter: wallet.balance, // applied on confirmation
         reference,
@@ -385,7 +383,7 @@ export class WalletService implements OnModuleInit {
         metadata: {
           account: account as any,
           platformFee: fundingFee,
-          grossAmount: amount,
+          grossAmount,
           netCredit,
         },
       },
@@ -393,8 +391,9 @@ export class WalletService implements OnModuleInit {
 
     return {
       reference: pending.reference,
-      amount,
+      amount: netCredit,
       fundingFee,
+      totalPayable: grossAmount,
       netCredit,
       currency: wallet.currency,
       provider: provider.name,
@@ -429,7 +428,10 @@ export class WalletService implements OnModuleInit {
     const platformFee = new Prisma.Decimal(
       (meta.platformFee ?? (await this.appSettingsService.getWalletFees()).fundingFee).toFixed(2),
     );
-    const net = gross.minus(platformFee);
+    const net =
+      meta.netCredit != null
+        ? new Prisma.Decimal(Number(meta.netCredit).toFixed(2))
+        : gross.minus(platformFee);
     if (net.lte(0)) {
       throw new BadRequestException('Funding amount is too low after platform fee');
     }
@@ -606,6 +608,45 @@ export class WalletService implements OnModuleInit {
         ? error
         : new BadRequestException(`Withdrawal failed: ${error.message}`);
     }
+  }
+
+  async creditWalletFromAdmin(
+    userId: string,
+    amount: number,
+    reason?: string,
+    adminEmail?: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const transaction = await this.applyLedgerEntry({
+      userId,
+      type: WalletTransactionType.CREDIT,
+      category: WalletTransactionCategory.ADJUSTMENT,
+      amount,
+      narration: reason?.trim() || 'Admin wallet credit',
+      provider: 'admin',
+      referencePrefix: 'adj',
+      metadata: {
+        source: 'admin',
+        reason: reason?.trim() || null,
+        creditedBy: adminEmail || null,
+      },
+    });
+
+    void this.notificationService
+      .sendNotification({
+        userIds: [userId],
+        type: NotificationType.PAYMENT_UPDATE,
+        title: 'Wallet credited',
+        body: `₦${amount.toLocaleString('en-NG')} was added to your wallet.`,
+        data: { reference: transaction.reference, amount: amount.toString() },
+      })
+      .catch((error) => this.logger.warn(`Wallet credit push failed for ${userId}: ${error.message}`));
+
+    return transaction;
   }
 
   async refundWithdrawal(
