@@ -73,6 +73,9 @@ export function formatTransactionTitle(input: TransactionTitleInput): string {
       return 'Boost order';
     }
     case WalletTransactionCategory.ADJUSTMENT:
+      if (readMetaString(meta, 'source') === 'admin') {
+        return 'Wallet top up';
+      }
       return 'Adjustment';
     default:
       return input.narration?.trim() || 'Transaction';

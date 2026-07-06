@@ -6,6 +6,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { EmailService } from '../emails/email.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
 import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
+import {
+  extractCategory,
+  extractPlatformFromServiceName,
+} from '../smm/smm-catalog-sync.util';
 import { resolveOrderReceiptEmail } from './order-receipt.util';
 
 @Injectable()
@@ -107,10 +111,6 @@ export class OrdersService {
     return 4;
   }
 
-  private static providerCategoryId(label: string): string {
-    return Buffer.from(label, 'utf8').toString('base64url');
-  }
-
   /**
    * Resolve the cheapest active service for a platform + service label that can
    * fulfil the requested quantity. Matches on the structured platform/category
@@ -176,7 +176,6 @@ export class OrdersService {
     const services = await this.prisma.service.findMany({
       where: {
         active: true,
-        providerCategory: { not: null },
         provider: { slug: activeProviderSlug },
       },
       include: { platform: true, category: true },
@@ -213,19 +212,33 @@ export class OrdersService {
       }
     >();
 
+    const sellablePlatforms = new Set(Object.values(OrdersService.PLATFORM_NAME_MAP));
+
     for (const service of services) {
-      const platformId = service.platform.slug || service.platform.name.toLowerCase();
+      const platformName =
+        service.platform.name === 'Other'
+          ? extractPlatformFromServiceName(service.name)
+          : service.platform.name;
+      if (!sellablePlatforms.has(platformName)) continue;
+
+      const platformId = platformName.toLowerCase();
       if (!byPlatform.has(platformId)) {
         byPlatform.set(platformId, {
           id: platformId,
-          label: service.platform.name,
+          label: platformName,
           categories: new Map(),
         });
       }
 
       const platform = byPlatform.get(platformId)!;
-      const categoryLabel = service.providerCategory!;
-      const categoryId = OrdersService.providerCategoryId(categoryLabel);
+      const categoryName =
+        service.category.name === 'Other'
+          ? extractCategory(service.name)
+          : service.category.name;
+      if (categoryName === 'Other') continue;
+
+      const categoryLabel = categoryName;
+      const categoryId = categoryLabel.toLowerCase().replace(/\s+/g, '-');
       if (!platform.categories.has(categoryId)) {
         platform.categories.set(categoryId, {
           id: categoryId,
@@ -248,7 +261,7 @@ export class OrdersService {
         dripfeed: service.dripfeed,
         refill: service.refill,
         cancel: service.cancel,
-        broadCategory: service.category.name,
+        broadCategory: categoryName,
       });
     }
 
