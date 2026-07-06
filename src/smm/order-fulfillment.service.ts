@@ -3,11 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   isSmmstoneInsufficientBalanceError,
-  isSmmstoneLowBalance,
   LOW_PROVIDER_BALANCE_ISSUE,
-  parseSmmstoneBalance,
-} from './smmstone-balance.util';
-import { SmmstoneService } from './smmstone.service';
+} from '../smmstone/smmstone-balance.util';
+import { SmmProviderRegistryService } from './smm-provider.registry';
 
 export interface FulfillmentResult {
   submitted: boolean;
@@ -17,9 +15,7 @@ export interface FulfillmentResult {
 }
 
 /**
- * Hands paid orders straight to SMMStone — no admin approval step.
- * If submission fails the order stays PENDING with a completed payment,
- * which surfaces it on the admin "needs attention" list for refire/refund.
+ * Hands paid orders to the active SMM provider — no admin approval step.
  */
 @Injectable()
 export class OrderFulfillmentService {
@@ -28,7 +24,7 @@ export class OrderFulfillmentService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly smmstoneService: SmmstoneService,
+    private readonly smmRegistry: SmmProviderRegistryService,
     private readonly configService: ConfigService,
   ) {
     this.lowBalanceThreshold = parseFloat(
@@ -39,7 +35,7 @@ export class OrderFulfillmentService {
   async fulfillOrder(orderId: string): Promise<FulfillmentResult> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { service: true },
+      include: { service: { include: { provider: true } } },
     });
 
     if (!order) {
@@ -49,12 +45,15 @@ export class OrderFulfillmentService {
       return { submitted: true, providerOrderId: order.providerOrderId };
     }
 
-    const balanceCheck = await this.smmstoneService.getBalanceStatus(this.lowBalanceThreshold);
+    const providerSlug = order.service?.provider?.slug || (await this.smmRegistry.getActiveSlug());
+    const provider = this.smmRegistry.getProvider(providerSlug);
+
+    const balanceCheck = await provider.getBalanceStatus(this.lowBalanceThreshold);
     if (balanceCheck.lowBalance) {
-      const message = `SMMStone balance is low ($${balanceCheck.balance?.toFixed(2) ?? '0.00'}). Top up the provider account to submit orders.`;
+      const message = `${provider.displayName} balance is low ($${balanceCheck.balance?.toFixed(2) ?? '0.00'}). Top up the provider account to submit orders.`;
       await this.markFulfillmentFailure(order.id, message, LOW_PROVIDER_BALANCE_ISSUE);
       this.logger.warn(
-        `Order ${order.id} queued — SMMStone balance low ($${balanceCheck.balance}). Threshold: $${this.lowBalanceThreshold}`,
+        `Order ${order.id} queued — ${provider.displayName} balance low ($${balanceCheck.balance}). Threshold: $${this.lowBalanceThreshold}`,
       );
       return {
         submitted: false,
@@ -64,7 +63,7 @@ export class OrderFulfillmentService {
     }
 
     try {
-      const response = await this.smmstoneService.submitOrder({
+      const response = await provider.submitOrder({
         service: parseInt(order.service.serviceId, 10),
         link: order.link,
         quantity: order.quantity,
@@ -80,10 +79,13 @@ export class OrderFulfillmentService {
         },
       });
 
-      this.logger.log(`Order ${order.id} submitted to SMMStone as #${providerOrderId}`);
+      this.logger.log(
+        `Order ${order.id} submitted to ${provider.displayName} as #${providerOrderId}`,
+      );
       return { submitted: true, providerOrderId };
     } catch (error) {
-      const message = error?.message || 'Unknown fulfillment error';
+      const err = error as { message?: string };
+      const message = err?.message || 'Unknown fulfillment error';
       const issue = isSmmstoneInsufficientBalanceError(message)
         ? LOW_PROVIDER_BALANCE_ISSUE
         : 'NOT_SUBMITTED';
@@ -92,7 +94,7 @@ export class OrderFulfillmentService {
 
       if (issue === LOW_PROVIDER_BALANCE_ISSUE) {
         this.logger.warn(
-          `Order ${order.id} queued — SMMStone rejected submission (insufficient provider balance): ${message}`,
+          `Order ${order.id} queued — ${provider.displayName} rejected submission (insufficient balance): ${message}`,
         );
       } else {
         this.logger.error(`Auto-fulfillment failed for order ${order.id}: ${message}`);
@@ -102,11 +104,7 @@ export class OrderFulfillmentService {
     }
   }
 
-  private async markFulfillmentFailure(
-    orderId: string,
-    message: string,
-    issue: string,
-  ) {
+  private async markFulfillmentFailure(orderId: string, message: string, issue: string) {
     await this.prisma.order.update({
       where: { id: orderId },
       data: {

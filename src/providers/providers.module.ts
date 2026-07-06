@@ -1,7 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { SmmstoneModule } from '../smmstone/smmstone.module';
+import { SmmModule } from '../smm/smm.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { NyraApiService } from './nyra/nyra-api.service';
 import { NyraBillsProvider } from './nyra/nyra-bills.provider';
@@ -13,7 +13,7 @@ import { ProviderRegistryService } from './provider-registry.service';
 import { AdminProvidersController } from './providers.controller';
 
 @Module({
-  imports: [PrismaModule, SmmstoneModule, forwardRef(() => WalletModule), forwardRef(() => NotificationsModule)],
+  imports: [PrismaModule, SmmModule, forwardRef(() => WalletModule), forwardRef(() => NotificationsModule)],
   controllers: [AdminProvidersController],
   providers: [
     NyraApiService,

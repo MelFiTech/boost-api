@@ -2,9 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  isSmmstoneInsufficientBalanceError,
   isSmmstoneLowBalance,
   parseSmmstoneBalance,
-} from './smmstone-balance.util';
+} from '../smmstone/smmstone-balance.util';
 import { ensureServiceProvider, syncProviderCatalog } from '../smm/smm-catalog-sync.util';
 import {
   SmmPanelApiClient,
@@ -14,11 +15,11 @@ import {
 import { SmmBalanceStatus, SmmProviderAdapter } from '../smm/smm-provider.types';
 
 @Injectable()
-export class SmmstoneService implements SmmProviderAdapter {
-  readonly slug = 'smmstone' as const;
-  readonly displayName = 'SMMStone';
+export class SmmpanelkingService implements SmmProviderAdapter {
+  readonly slug = 'smmpanelking' as const;
+  readonly displayName = 'SMM Panel King';
 
-  private readonly logger = new Logger(SmmstoneService.name);
+  private readonly logger = new Logger(SmmpanelkingService.name);
   private readonly client: SmmPanelApiClient;
   private readonly apiUrl: string;
   private readonly apiKey: string;
@@ -28,11 +29,12 @@ export class SmmstoneService implements SmmProviderAdapter {
     private readonly prisma: PrismaService,
   ) {
     this.apiUrl =
-      this.configService.get<string>('SMMSTONE_API_URL') || 'https://smmstone.com/api/v2';
-    this.apiKey = this.configService.get<string>('SMMSTONE_API_KEY') || '';
+      this.configService.get<string>('SMMPANELKING_API_URL') ||
+      'https://smmpanelking.com/api/v2';
+    this.apiKey = this.configService.get<string>('SMMPANELKING_API_KEY') || '';
 
     if (!this.apiKey) {
-      this.logger.warn('SMMStone API key not configured');
+      this.logger.warn('SMM Panel King API key not configured');
     }
 
     this.client = new SmmPanelApiClient(
@@ -43,12 +45,12 @@ export class SmmstoneService implements SmmProviderAdapter {
     );
   }
 
-  async getServices(): Promise<unknown[]> {
-    return this.client.getServices();
-  }
-
   async getBalance(): Promise<unknown> {
     return this.client.getBalance();
+  }
+
+  async getServices(): Promise<unknown[]> {
+    return this.client.getServices();
   }
 
   async getBalanceStatus(threshold = 10): Promise<SmmBalanceStatus> {
@@ -80,36 +82,14 @@ export class SmmstoneService implements SmmProviderAdapter {
     return this.client.getMultipleOrderStatus(orderIds);
   }
 
-  async requestRefill(orderId: number): Promise<unknown> {
-    return this.client.call({ action: 'refill', order: orderId });
-  }
-
-  async requestMultipleRefill(orderIds: number[]): Promise<unknown> {
-    return this.client.call({ action: 'refill', orders: orderIds.join(',') });
-  }
-
-  async getRefillStatus(refillId: number): Promise<unknown> {
-    return this.client.call({ action: 'refill_status', refill: refillId });
-  }
-
-  async getMultipleRefillStatus(refillIds: number[]): Promise<unknown> {
-    return this.client.call({ action: 'refill_status', refills: refillIds.join(',') });
-  }
-
-  async cancelOrders(orderIds: number[]): Promise<unknown> {
-    return this.client.call({ action: 'cancel', orders: orderIds.join(',') });
-  }
-
   async fetchAndStoreServices(): Promise<void> {
-    this.logger.log('Fetching and storing services from SMMStone API…');
+    this.logger.log('Fetching services from SMM Panel King…');
+    const services = (await this.client.getServices()) as Array<Record<string, unknown>>;
 
-    const services = (await this.getServices()) as Array<Record<string, unknown>>;
     if (!services.length) {
-      this.logger.warn('No services returned from SMMStone API');
+      this.logger.warn('No services returned from SMM Panel King API');
       return;
     }
-
-    this.logger.log(`Fetched ${services.length} services from SMMStone`);
 
     const provider = await ensureServiceProvider(
       this.prisma,
@@ -120,6 +100,6 @@ export class SmmstoneService implements SmmProviderAdapter {
     );
 
     await syncProviderCatalog(this.prisma, this.logger, provider, services);
-    this.logger.log('SMMStone services successfully synchronized');
+    this.logger.log('SMM Panel King services synchronized');
   }
 }

@@ -3,6 +3,8 @@ import { OrderStatus, PaymentStatus, TransactionStatus } from '@prisma/client';
 import { NyraApiService } from '../providers/nyra/nyra-api.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
+import { SmmpanelkingService } from '../smmpanelking/smmpanelking.service';
 import { SmmstoneService } from '../smmstone/smmstone.service';
 import {
   LOW_PROVIDER_BALANCE_ISSUE,
@@ -25,6 +27,8 @@ export class AdminDashboardService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly smmstoneService: SmmstoneService,
+    private readonly smmpanelkingService: SmmpanelkingService,
+    private readonly smmRegistry: SmmProviderRegistryService,
     private readonly nyraApi: NyraApiService,
     private readonly appSettingsService: AppSettingsService,
   ) {}
@@ -292,32 +296,44 @@ export class AdminDashboardService {
       },
     });
 
-    const smmstone = await this.smmstoneService
-      .getBalance()
-      .then((data) => {
-        const balance = parseSmmstoneBalance(data);
-        const lowBalance =
-          balance != null ? balance < lowBalanceThreshold : false;
-        return {
-          balance,
-          currency: data?.currency || 'USD',
-          lowBalance,
-          lowBalanceThreshold,
-          pendingDueToLowBalance,
-          error: null as string | null,
-        };
-      })
-      .catch((err) => {
-        this.logger.warn(`SMMStone balance fetch failed: ${err.message}`);
-        return {
-          balance: null,
-          currency: 'USD',
-          lowBalance: false,
-          lowBalanceThreshold,
-          pendingDueToLowBalance,
-          error: err.message,
-        };
-      });
+    const fetchSmmBalance = async (
+      label: string,
+      fetcher: () => Promise<unknown>,
+    ) =>
+      fetcher()
+        .then((data) => {
+          const balance = parseSmmstoneBalance(data);
+          const lowBalance =
+            balance != null ? balance < lowBalanceThreshold : false;
+          return {
+            balance,
+            currency:
+              typeof data === 'object' && data && 'currency' in data
+                ? String((data as { currency?: string }).currency || 'USD')
+                : 'USD',
+            lowBalance,
+            lowBalanceThreshold,
+            pendingDueToLowBalance,
+            error: null as string | null,
+          };
+        })
+        .catch((err) => {
+          this.logger.warn(`${label} balance fetch failed: ${err.message}`);
+          return {
+            balance: null,
+            currency: 'USD',
+            lowBalance: false,
+            lowBalanceThreshold,
+            pendingDueToLowBalance,
+            error: err.message,
+          };
+        });
+
+    const [smmstone, smmpanelking, activeSmmProvider] = await Promise.all([
+      fetchSmmBalance('SMMStone', () => this.smmstoneService.getBalance()),
+      fetchSmmBalance('SMM Panel King', () => this.smmpanelkingService.getBalance()),
+      this.smmRegistry.getActiveSlug(),
+    ]);
 
     const nyraMaster = await this.nyraApi
       .getBusinessWalletBalance()
@@ -379,6 +395,6 @@ export class AdminDashboardService {
         };
       });
 
-    return { smmstone, nyraMaster, nyraFloat };
+    return { smmstone, smmpanelking, activeSmmProvider, nyraMaster, nyraFloat };
   }
 }

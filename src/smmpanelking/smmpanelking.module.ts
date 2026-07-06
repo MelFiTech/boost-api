@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
-import { SmmstoneService } from './smmstone.service';
+import { SmmpanelkingService } from './smmpanelking.service';
 
 @Module({
   imports: [ConfigModule, PrismaModule],
-  providers: [SmmstoneService],
-  exports: [SmmstoneService],
+  providers: [SmmpanelkingService],
+  exports: [SmmpanelkingService],
 })
-export class SmmstoneModule {}
+export class SmmpanelkingModule {}

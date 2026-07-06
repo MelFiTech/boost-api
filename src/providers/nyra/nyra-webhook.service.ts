@@ -5,7 +5,7 @@ import {
   WalletTransactionType,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { OrderFulfillmentService } from '../../smmstone/order-fulfillment.service';
+import { OrderFulfillmentService } from '../../smm/order-fulfillment.service';
 import { NotificationService } from '../../services/notification.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { NyraApiService } from './nyra-api.service';

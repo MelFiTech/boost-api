@@ -182,6 +182,10 @@ export function getAdminDashboardHtml(apiBase: string): string {
               <div class="panel-header"><h3>SMMStone</h3></div>
               <div class="panel-body padded" id="smmstoneBody"></div>
             </div>
+            <div class="panel">
+              <div class="panel-header"><h3>SMM Panel King</h3></div>
+              <div class="panel-body padded" id="smmpanelkingBody"></div>
+            </div>
           </div>
           <div class="panel">
             <div class="panel-header"><h3>System stats</h3></div>
@@ -232,8 +236,8 @@ export function getAdminDashboardHtml(apiBase: string): string {
           <div class="panel">
             <div class="panel-header">
               <div>
-                <h3>Payment providers</h3>
-                <p class="muted" style="margin-top:4px;font-size:.82rem">Switch funding, bills, and Nyra VA rails at runtime.</p>
+                <h3>Providers</h3>
+                <p class="muted" style="margin-top:4px;font-size:.82rem">Switch SMM fulfillment, wallet funding, bills, and Nyra VA rails at runtime.</p>
               </div>
             </div>
             <div class="panel-body padded" id="providersBody"></div>

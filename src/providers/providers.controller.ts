@@ -3,6 +3,7 @@ import { ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { IsEnum, IsIn, IsString } from 'class-validator';
 import { ProviderKind } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
 import { NyraFundingRail } from './nyra/nyra.types';
 import { NyraApiService } from './nyra/nyra-api.service';
 import { ProviderRegistryService } from './provider-registry.service';
@@ -27,17 +28,28 @@ class SetNyraFundingRailDto {
 export class AdminProvidersController {
   constructor(
     private readonly registry: ProviderRegistryService,
+    private readonly smmRegistry: SmmProviderRegistryService,
     private readonly nyraApi: NyraApiService,
   ) {}
 
   @Get()
   @ApiOperation({ summary: 'List provider configs and registered providers' })
   async listProviders() {
+    const [fundingBillsConfigs, smmConfigs, activeSmmProvider] = await Promise.all([
+      this.registry.listConfigs(),
+      this.smmRegistry.listConfigs(),
+      this.smmRegistry.getActiveSlug(),
+    ]);
+
     return {
       success: true,
       data: {
-        registered: this.registry.registeredProviders(),
-        configs: await this.registry.listConfigs(),
+        registered: {
+          ...this.registry.registeredProviders(),
+          SMM: this.smmRegistry.registeredSlugs(),
+        },
+        configs: [...fundingBillsConfigs, ...smmConfigs],
+        activeSmmProvider,
         nyraFundingRail: await this.registry.getNyraFundingRail(),
         nyraFundingRails: this.registry.listNyraFundingRails(),
       },
@@ -45,8 +57,13 @@ export class AdminProvidersController {
   }
 
   @Patch('active')
-  @ApiOperation({ summary: 'Switch the active provider for FUNDING or BILLS at runtime' })
+  @ApiOperation({ summary: 'Switch the active provider for FUNDING, BILLS, or SMM at runtime' })
   async setActive(@Body() dto: SetActiveProviderDto) {
+    if (dto.kind === ProviderKind.SMM) {
+      const config = await this.smmRegistry.setActiveProvider(dto.provider);
+      return { success: true, data: config };
+    }
+
     const config = await this.registry.setActiveProvider(dto.kind, dto.provider);
     return { success: true, data: config };
   }

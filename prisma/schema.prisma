@@ -429,6 +429,7 @@ model ProviderConfig {
 enum ProviderKind {
   FUNDING
   BILLS
+  SMM
 }
 
 // ---------- App settings (support links, etc.) ----------

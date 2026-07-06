@@ -5,6 +5,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { SmmstoneModule } from './smmstone/smmstone.module';
+import { SmmModule } from './smm/smm.module';
 import { EmailModule } from './emails/email.module';
 import { FeaturesModule } from './features/features.module';
 import { AppSettingsModule } from './app-settings/app-settings.module';
@@ -46,6 +47,7 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     AuthModule,
     NotificationsModule,
     SmmstoneModule,
+    SmmModule,
     EmailModule,
     FeaturesModule,
     AppSettingsModule,

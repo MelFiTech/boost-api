@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService } from '../services/orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SmmstoneService } from '../smmstone/smmstone.service';
+import { SmmpanelkingService } from '../smmpanelking/smmpanelking.service';
+import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
 import { NotificationService } from '../services/notification.service';
 import { AdminDashboardService, DashboardPeriod } from '../services/admin-dashboard.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
@@ -55,6 +57,8 @@ export class AdminController {
     private readonly prisma: PrismaService,
     private readonly ordersService: OrdersService,
     private readonly smmstoneService: SmmstoneService,
+    private readonly smmpanelkingService: SmmpanelkingService,
+    private readonly smmRegistry: SmmProviderRegistryService,
     private readonly notificationService: NotificationService,
     private readonly adminDashboardService: AdminDashboardService,
     private readonly appSettingsService: AppSettingsService,
@@ -464,7 +468,8 @@ export class AdminController {
         },
         service: {
           include: {
-            platform: true
+            platform: true,
+            provider: true,
           }
         },
         payment: true
@@ -537,7 +542,8 @@ export class AdminController {
         },
         service: {
           include: {
-            platform: true
+            platform: true,
+            provider: true,
           }
         },
         payment: true
@@ -618,7 +624,8 @@ export class AdminController {
       include: {
         service: {
           include: {
-            platform: true
+            platform: true,
+            provider: true,
           }
         },
         payment: true
@@ -852,7 +859,8 @@ export class AdminController {
       include: {
         service: {
           include: {
-            platform: true
+            platform: true,
+            provider: true,
           }
         },
         user: true,
@@ -871,7 +879,7 @@ export class AdminController {
         // If order has providerOrderId (SMMStone order), get progress
         if (order.providerOrderId) {
           try {
-            const smmstoneStatus = await this.smmstoneService.getOrderStatus(parseInt(order.providerOrderId));
+            const smmstoneStatus = await this.getProviderOrderStatus(order);
             
             // Calculate progress based on SMMStone data
             const startCount = parseInt(String(smmstoneStatus.start_count || '0'));
@@ -1061,7 +1069,8 @@ export class AdminController {
         include: {
           service: {
             include: {
-              platform: true
+              platform: true,
+              provider: true,
             }
           },
           user: true,
@@ -1083,7 +1092,7 @@ export class AdminController {
         // If order has providerOrderId (SMMStone), get fulfillment details
         if (order.providerOrderId) {
           try {
-            const smmstoneStatus = await this.smmstoneService.getOrderStatus(parseInt(order.providerOrderId));
+            const smmstoneStatus = await this.getProviderOrderStatus(order);
             
             const delivered = order.quantity - parseInt(String(smmstoneStatus.remains || '0'));
             const completionRate = Math.round((delivered / order.quantity) * 100);
@@ -2293,6 +2302,66 @@ export class AdminController {
     }
   }
 
+  @Get('smmpanelking/balance')
+  @UseGuards(JwtAuthGuard)
+  async getSmmpanelkingBalance() {
+    try {
+      const threshold = parseFloat(process.env.SMMSTONE_LOW_BALANCE_THRESHOLD || '10');
+      const status = await this.smmpanelkingService.getBalanceStatus(threshold);
+      const pendingDueToLowBalance = await this.prisma.order.count({
+        where: {
+          status: 'PENDING',
+          providerOrderId: null,
+          fulfillmentError: { contains: 'LOW_PROVIDER_BALANCE' },
+          payment: { status: 'COMPLETED' },
+        },
+      });
+      return {
+        success: true,
+        data: {
+          ...status,
+          pendingDueToLowBalance,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  @Post('smmpanelking/sync-services')
+  @UseGuards(JwtAuthGuard)
+  async syncSmmpanelkingServices() {
+    try {
+      await this.smmpanelkingService.fetchAndStoreServices();
+      return {
+        success: true,
+        message: 'SMM Panel King services synchronized successfully',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  @Get('smm/active-provider')
+  @UseGuards(JwtAuthGuard)
+  async getActiveSmmProvider() {
+    const slug = await this.smmRegistry.getActiveSlug();
+    const provider = this.smmRegistry.getProvider(slug);
+    return {
+      success: true,
+      data: {
+        slug,
+        displayName: provider.displayName,
+      },
+    };
+  }
+
   @Post('orders/:orderId/fulfill-smmstone')
   @UseGuards(JwtAuthGuard)
   async fulfillOrderWithSMMStone(
@@ -2395,14 +2464,15 @@ export class AdminController {
   async checkSMMStoneOrderStatus(@Param('orderId') orderId: string): Promise<any> {
     try {
       const order = await this.prisma.order.findUnique({
-        where: { id: orderId }
+        where: { id: orderId },
+        include: { service: { include: { provider: true } } },
       });
 
       if (!order || !order.providerOrderId) {
-        throw new NotFoundException('Order not found or not submitted to SMMStone');
+        throw new NotFoundException('Order not found or not submitted to provider');
       }
 
-      const status = await this.smmstoneService.getOrderStatus(parseInt(order.providerOrderId));
+      const status = await this.getProviderOrderStatus(order);
 
       return {
         success: true,
@@ -2424,15 +2494,16 @@ export class AdminController {
       const order = await this.prisma.order.findUnique({
         where: { id: orderId },
         include: {
-          user: true
-        }
+          user: true,
+          service: { include: { provider: true } },
+        },
       });
 
       if (!order || !order.providerOrderId) {
-        throw new NotFoundException('Order not found or not submitted to SMMStone');
+        throw new NotFoundException('Order not found or not submitted to provider');
       }
 
-      const smmstoneStatus = await this.smmstoneService.getOrderStatus(parseInt(order.providerOrderId));
+      const smmstoneStatus = await this.getProviderOrderStatus(order);
       
       // Map SMMStone status to our status
       let newStatus = order.status;
@@ -2539,4 +2610,17 @@ export class AdminController {
       };
     }
   }
-} 
+
+  private async getProviderOrderStatus(order: {
+    providerOrderId: string | null;
+    service?: { provider?: { slug?: string } | null } | null;
+  }) {
+    if (!order.providerOrderId) {
+      throw new NotFoundException('Order not submitted to provider');
+    }
+    const slug =
+      order.service?.provider?.slug || (await this.smmRegistry.getActiveSlug());
+    const provider = this.smmRegistry.getProvider(slug);
+    return provider.getOrderStatus(parseInt(order.providerOrderId, 10));
+  }
+}

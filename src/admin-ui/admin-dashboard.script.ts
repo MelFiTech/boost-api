@@ -112,15 +112,23 @@ export function getAdminDashboardScript(apiBase: string): string {
     return '<span class="badge ' + cls + '">' + label + '</span>';
   }
 
-  function smmstoneMetricCard(smm) {
+  function smmProviderMetricCard(label, smm) {
     const low = !!smm.lowBalance;
     const bal = smm.error ? '—' : usd(smm.balance);
     const hint = smm.error
       ? 'Balance unavailable'
       : low
-        ? (smm.pendingDueToLowBalance || 0) + ' order' + ((smm.pendingDueToLowBalance || 0) === 1 ? '' : 's') + ' queued · top up SMMStone'
+        ? (smm.pendingDueToLowBalance || 0) + ' order' + ((smm.pendingDueToLowBalance || 0) === 1 ? '' : 's') + ' queued · top up ' + label
         : 'Provider balance healthy';
-    return metricCard('SMMStone', bal, low ? 'provider danger' : 'provider', hint);
+    return metricCard(label, bal, low ? 'provider danger' : 'provider', hint);
+  }
+
+  function smmstoneMetricCard(smm) {
+    return smmProviderMetricCard('SMMStone', smm);
+  }
+
+  function smmpanelkingMetricCard(smm) {
+    return smmProviderMetricCard('Panel King', smm);
   }
 
   function updateAttentionBadge(count) {
@@ -140,7 +148,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     if (count > 0) {
       const lowBalanceCount = window.__attentionLowBalanceCount || 0;
       const lowBalanceNote = lowBalanceCount > 0
-        ? ' · ' + lowBalanceCount + ' queued because SMMStone balance is low'
+        ? ' · ' + lowBalanceCount + ' queued because provider balance is low'
         : '';
       banner.innerHTML = '<div class="attention-banner-inner"><div><strong>' + count + ' order' + (count === 1 ? '' : 's') + ' need attention</strong><div class="muted" style="margin-top:4px;font-size:.82rem">Paid-but-not-submitted, failed, or cancelled — refire, refund, or notify customers.' + lowBalanceNote + '</div></div><button class="btn btn-primary btn-sm" onclick="setOrdersTab(\\'attention\\')">Review now</button></div>';
       show(banner);
@@ -283,6 +291,8 @@ export function getAdminDashboardScript(apiBase: string): string {
       const range = a.range || {};
       const prov = a.providers || {};
       const smm = prov.smmstone || {};
+      const panelKing = prov.smmpanelking || {};
+      const activeSmm = prov.activeSmmProvider || 'smmstone';
       const nyraMaster = prov.nyraMaster || {};
       const nyraFloat = prov.nyraFloat || {};
       const wallets = a.wallets || {};
@@ -304,6 +314,8 @@ export function getAdminDashboardScript(apiBase: string): string {
         metricCard('Nyra settled', nyraSettled, 'provider accent', 'Live provider balance') +
         metricCard('Nyra unsettled', nyraUnsettled, 'provider', 'Pending T+1 settlement') +
         smmstoneMetricCard(smm) +
+        smmpanelkingMetricCard(panelKing) +
+        metricCard('Active SMM', activeSmm, 'accent', 'New orders route here') +
         metricCard('User wallets', money(wallets.totalBalance), 'wallet', wallets.activeWithBalance + ' wallets with balance') +
         metricCard('Users', String(users.total || 0), '', (users.newInPeriod || 0) + ' new' + periodSuffix) +
         metricCard('Wallet txns', String(txns.walletTxCount || 0), '', periodSuffix.replace(' · ', '') || 'In period') +
@@ -350,6 +362,9 @@ export function getAdminDashboardScript(apiBase: string): string {
         '<div class="health-item"><span>Funding provider</span><strong>' + (activeFunding?.provider || '—') + '</strong></div>' +
         '<div class="health-item"><span>Bills provider</span><strong>' + (activeBills?.provider || '—') + '</strong></div>' +
         '<div class="health-item"><span>Nyra VA rail</span><strong>' + (pData.nyraFundingRail || '—') + '</strong></div>' +
+        '<div class="health-item"><span>SMMStone</span><strong>' + (smm.error ? '—' : usd(smm.balance)) + '</strong></div>' +
+        '<div class="health-item"><span>Panel King</span><strong>' + (panelKing.error ? '—' : usd(panelKing.balance)) + '</strong></div>' +
+        '<div class="health-item"><span>Active SMM</span><strong>' + activeSmm + '</strong></div>' +
         '<div class="health-item"><span>Float accounts</span><strong>' + (nyraFloat.walletCount || 0) + '</strong></div>' +
         '<div class="health-item"><span>All-time order revenue</span><strong>' + money(stats.totalRevenue) + '</strong></div>' +
         '</div>';
@@ -465,7 +480,7 @@ export function getAdminDashboardScript(apiBase: string): string {
         ? '<div class="muted" style="font-size:.82rem">Guest order — refund is unavailable. Use notify instead.</div>'
         : '<button class="btn btn-danger btn-sm" onclick="refundAttentionOrder(\\'' + id + '\\')">Refund to wallet</button>';
       const actions = '<div class="toolbar">' +
-        '<button class="btn btn-success btn-sm" onclick="refireAttentionOrder(\\'' + id + '\\')">Refire to SMMStone</button>' +
+        '<button class="btn btn-success btn-sm" onclick="refireAttentionOrder(\\'' + id + '\\')">Refire to provider</button>' +
         refundAction +
         '<button class="btn btn-ghost btn-sm" onclick="openNotifyOrder(\\'' + id + '\\', \\'' + String(o.userEmail || '').replace(/'/g, '') + '\\')">Notify customer</button>' +
         '</div>';
@@ -488,7 +503,7 @@ export function getAdminDashboardScript(apiBase: string): string {
   };
 
   window.refireAttentionOrder = async function(id) {
-    if (!confirm('Re-submit this order to SMMStone?')) return;
+    if (!confirm('Re-submit this order to the SMM provider?')) return;
     try {
       const res = await apiFetch('/admin/orders/' + id + '/refire', { method: 'POST' });
       toast('Order refired' + (res.data?.providerOrderId ? ' · ref ' + res.data.providerOrderId : ''));
@@ -610,19 +625,49 @@ export function getAdminDashboardScript(apiBase: string): string {
   };
 
   // ─── Integrations ────────────────────────────────────────────
+  function renderSmmProviderPanel(bodyId, label, syncPath, bal) {
+    const el = $(bodyId);
+    if (!el) return;
+    el.innerHTML =
+      (bal.lowBalance
+        ? '<div class="attention-banner" style="margin-bottom:14px"><div class="attention-banner-inner"><div><strong>' + label + ' balance is low</strong><div class="muted" style="margin-top:4px;font-size:.82rem">' +
+          (bal.pendingDueToLowBalance || 0) + ' paid order' + ((bal.pendingDueToLowBalance || 0) === 1 ? '' : 's') +
+          ' waiting to be submitted. Top up the provider, then refire from Orders → Needs attention.</div></div></div></div>'
+        : '') +
+      '<p class="muted" style="margin-bottom:14px">Sync services from ' + label + ' and check provider balance.</p>' +
+      '<div class="toolbar"><button class="btn btn-primary btn-sm sync-smm-btn" data-sync-path="' + syncPath + '">Sync services</button><button class="btn btn-ghost btn-sm refresh-smm-btn">Refresh balance</button></div>' +
+      '<pre class="json" style="margin-top:14px">' + JSON.stringify(bal, null, 2) + '</pre>';
+    el.querySelector('.sync-smm-btn')?.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const r = await apiFetch(syncPath, { method: 'POST' });
+        toast(r.message || 'Services synced');
+        loadIntegrations();
+      } catch (e) { toast(e.message, true); }
+      btn.disabled = false;
+    });
+    el.querySelector('.refresh-smm-btn')?.addEventListener('click', () => loadIntegrations());
+  }
+
   async function loadIntegrations() {
     $('integrationMetrics').innerHTML = '<div class="loading">Loading…</div>';
     $('nyraWalletBody').innerHTML = '<div class="loading">Loading…</div>';
     $('smmstoneBody').innerHTML = '<div class="loading">Loading…</div>';
+    if ($('smmpanelkingBody')) $('smmpanelkingBody').innerHTML = '<div class="loading">Loading…</div>';
     $('systemStatsBody').innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const [balance, stats, nyraWallet, rates] = await Promise.all([
+      const [balance, panelKingBalance, activeSmmRes, stats, nyraWallet, rates] = await Promise.all([
         apiFetch('/admin/smmstone/balance').catch((e) => ({ success: false, error: e.message })),
+        apiFetch('/admin/smmpanelking/balance').catch((e) => ({ success: false, error: e.message })),
+        apiFetch('/admin/smm/active-provider').catch(() => ({ data: { slug: 'smmstone' } })),
         apiFetch('/admin/stats'),
         apiFetch('/admin/providers/nyra/wallet-balance').catch((e) => ({ success: false, error: e.message })),
         apiFetch('/admin/rates').catch(() => null),
       ]);
       const bal = balance.data || {};
+      const pkBal = panelKingBalance.data || {};
+      const activeSmm = activeSmmRes.data?.slug || 'smmstone';
       const nyra = nyraWallet.data || {};
       const smmMetric = {
         balance: bal.balance,
@@ -630,10 +675,18 @@ export function getAdminDashboardScript(apiBase: string): string {
         pendingDueToLowBalance: bal.pendingDueToLowBalance || 0,
         error: balance.success === false ? (balance.error || 'Unavailable') : null,
       };
+      const pkMetric = {
+        balance: pkBal.balance,
+        lowBalance: !!pkBal.lowBalance,
+        pendingDueToLowBalance: pkBal.pendingDueToLowBalance || 0,
+        error: panelKingBalance.success === false ? (panelKingBalance.error || 'Unavailable') : null,
+      };
       $('integrationMetrics').innerHTML =
         metricCard('Nyra settled', nyraWallet.success === false ? '—' : money(nyra.available_balance), 'accent') +
         metricCard('Nyra unsettled', nyraWallet.success === false ? '—' : money(nyra.unsettled_balance), 'provider') +
         smmstoneMetricCard(smmMetric) +
+        smmpanelkingMetricCard(pkMetric) +
+        metricCard('Active SMM', activeSmm, 'accent', 'Switch under Providers') +
         metricCard('Services', String(stats.services || 0)) +
         metricCard('Categories', String(stats.categories || 0)) +
         metricCard('Orders', String(stats.orders || 0));
@@ -651,25 +704,8 @@ export function getAdminDashboardScript(apiBase: string): string {
           '<pre class="json" style="margin-top:14px">' + JSON.stringify(nyra, null, 2) + '</pre>';
       if ($('refreshNyraBtn')) $('refreshNyraBtn').onclick = () => loadIntegrations();
 
-      $('smmstoneBody').innerHTML =
-        (bal.lowBalance
-          ? '<div class="attention-banner" style="margin-bottom:14px"><div class="attention-banner-inner"><div><strong>SMMStone balance is low</strong><div class="muted" style="margin-top:4px;font-size:.82rem">' +
-            (bal.pendingDueToLowBalance || 0) + ' paid order' + ((bal.pendingDueToLowBalance || 0) === 1 ? '' : 's') +
-            ' waiting to be submitted. Top up SMMStone, then refire from Orders → Needs attention.</div></div></div></div>'
-          : '') +
-        '<p class="muted" style="margin-bottom:14px">Sync services from SMMStone and check provider balance.</p>' +
-        '<div class="toolbar"><button class="btn btn-primary btn-sm" id="syncSmmstoneBtn">Sync services</button><button class="btn btn-ghost btn-sm" id="refreshBalanceBtn">Refresh balance</button></div>' +
-        '<pre class="json" style="margin-top:14px">' + JSON.stringify(bal, null, 2) + '</pre>';
-      $('syncSmmstoneBtn').onclick = async () => {
-        $('syncSmmstoneBtn').disabled = true;
-        try {
-          const r = await apiFetch('/admin/smmstone/sync-services', { method: 'POST' });
-          toast(r.message || 'Services synced');
-          loadIntegrations();
-        } catch (e) { toast(e.message, true); }
-        $('syncSmmstoneBtn').disabled = false;
-      };
-      $('refreshBalanceBtn').onclick = () => loadIntegrations();
+      renderSmmProviderPanel('smmstoneBody', 'SMMStone', '/admin/smmstone/sync-services', bal);
+      renderSmmProviderPanel('smmpanelkingBody', 'SMM Panel King', '/admin/smmpanelking/sync-services', pkBal);
 
       const ratesInfo = (stats.rates || {});
       const markupPct = rates?.markupPercentage ?? ratesInfo.markupPercentage ?? 0;
@@ -684,6 +720,7 @@ export function getAdminDashboardScript(apiBase: string): string {
       $('integrationMetrics').innerHTML = errHtml(null, e.message);
       $('nyraWalletBody').innerHTML = errHtml(null, e.message);
       $('smmstoneBody').innerHTML = errHtml(null, e.message);
+      if ($('smmpanelkingBody')) $('smmpanelkingBody').innerHTML = errHtml(null, e.message);
       $('systemStatsBody').innerHTML = errHtml(null, e.message);
     }
   }
@@ -879,18 +916,50 @@ export function getAdminDashboardScript(apiBase: string): string {
     } catch (e) { toast(e.message, true); }
   };
 
+  const SMM_PROVIDER_LABELS = {
+    smmstone: 'SMMStone',
+    smmpanelking: 'Panel King',
+  };
+
+  function smmProviderLabel(slug) {
+    return SMM_PROVIDER_LABELS[slug] || slug;
+  }
+
   // ─── Providers ───────────────────────────────────────────────
   async function loadProviders() {
     $('providersBody').innerHTML = '<div class="loading">Loading providers…</div>';
     try {
-      const res = await apiFetch('/admin/providers');
+      const [res, smmstoneBal, panelKingBal] = await Promise.all([
+        apiFetch('/admin/providers'),
+        apiFetch('/admin/smmstone/balance').catch(() => ({ data: {} })),
+        apiFetch('/admin/smmpanelking/balance').catch(() => ({ data: {} })),
+      ]);
       const data = res.data || {};
       const configs = data.configs || [];
       const registered = data.registered || {};
       const rail = data.nyraFundingRail || 'Flutterwave';
       const rails = data.nyraFundingRails || ['Safe_Haven', 'Flutterwave'];
+      const smmProviders = registered.SMM || registered.smm || ['smmstone', 'smmpanelking'];
+      const activeSmm = configs.find((c) => c.kind === 'SMM' && c.active);
+      const smmBalances = {
+        smmstone: smmstoneBal.data || {},
+        smmpanelking: panelKingBal.data || {},
+      };
 
-      let html = '<div class="field-label">Active providers</div>';
+      let html = '<div class="field-label">SMM fulfillment</div>';
+      html += '<div class="config-card' + (activeSmm ? ' active' : '') + '"><h4>Active SMM provider</h4>';
+      html += '<p>Currently: <strong>' + smmProviderLabel(activeSmm?.provider || data.activeSmmProvider || 'smmstone') + '</strong></p>';
+      html += '<p class="muted" style="margin:8px 0 12px;font-size:.82rem">New orders and the mobile catalog use this provider. Sync services on Integrations after switching.</p>';
+      html += '<div class="toolbar">';
+      (Array.isArray(smmProviders) ? smmProviders : []).forEach((p) => {
+        const isActive = (activeSmm?.provider || data.activeSmmProvider) === p;
+        const bal = smmBalances[p]?.balance;
+        const balText = bal != null && !smmBalances[p]?.error ? ' · ' + usd(bal) : '';
+        html += '<button class="btn ' + (isActive ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="setProvider(\\'SMM\\',\\'' + p + '\\')"' + (isActive ? ' disabled' : '') + '>' + smmProviderLabel(p) + balText + '</button>';
+      });
+      html += '</div></div>';
+
+      html += '<div class="field-label" style="margin-top:20px">Wallet &amp; bills</div>';
       ['FUNDING', 'BILLS'].forEach((kind) => {
         const active = configs.find((c) => c.kind === kind && c.active);
         const providers = registered[kind] || registered[kind.toLowerCase()] || [];
@@ -923,10 +992,14 @@ export function getAdminDashboardScript(apiBase: string): string {
   }
 
   window.setProvider = async function(kind, provider) {
-    if (!confirm('Switch ' + kind + ' provider to ' + provider + '?')) return;
+    const label = kind === 'SMM' ? smmProviderLabel(provider) : provider;
+    const kindLabel = kind === 'SMM' ? 'SMM fulfillment' : kind;
+    if (!confirm('Switch ' + kindLabel + ' to ' + label + '?' + (kind === 'SMM' ? '\\n\\nRemember to sync services on Integrations if you have not already.' : ''))) return;
     try {
       await apiFetch('/admin/providers/active', { method: 'PATCH', body: JSON.stringify({ kind, provider }) });
-      toast('Provider updated'); loadProviders();
+      toast(kind === 'SMM' ? 'SMM provider switched to ' + label : 'Provider updated');
+      loadProviders();
+      if (kind === 'SMM' && typeof loadDashboard === 'function') loadDashboard();
     } catch (e) { toast(e.message, true); }
   };
 

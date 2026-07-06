@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlatformService } from './platform.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
-import axios from 'axios';
+import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
 import { SMMServiceRequest, ServiceResponse, SMMService as SMMServiceType } from '../types/smm.types';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ServiceRequestDto, Currency } from '../dto/service-request.dto';
@@ -20,6 +20,7 @@ export class SMMService {
     private prisma: PrismaService,
     private platformService: PlatformService,
     private readonly appSettingsService: AppSettingsService,
+    private readonly smmRegistry: SmmProviderRegistryService,
   ) {
     this.apiUrl = this.configService.get<string>('SMMSTONE_API_URL');
     this.apiKey = this.configService.get<string>('SMMSTONE_API_KEY');
@@ -48,27 +49,12 @@ export class SMMService {
 
   async fetchProviderServices(): Promise<SMMServiceType[]> {
     try {
-      const data: SMMServiceRequest = {
-        key: this.apiKey,
-        action: 'services'
-      };
-
-      this.logger.debug(`Making API request to ${this.apiUrl}`);
-      this.logger.debug(`Request data: ${JSON.stringify(data)}`);
-
-      const params = new URLSearchParams();
-      params.append('key', this.apiKey);
-      params.append('action', 'services');
-
-      const response = await axios.post(this.apiUrl, params, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
-      });
-
-      return response.data;
+      const provider = await this.smmRegistry.getActiveProvider();
+      const services = await provider.getServices();
+      return services as SMMServiceType[];
     } catch (error) {
-      this.logger.error('Error fetching services from provider:', error.message);
+      const err = error as { message?: string };
+      this.logger.error('Error fetching services from provider:', err.message);
       throw error;
     }
   }
@@ -79,21 +65,21 @@ export class SMMService {
     hasChanges: boolean;
   }> {
     try {
-      // Ensure SMMStone provider exists
+      const activeProvider = await this.smmRegistry.getActiveProvider();
       const provider = await this.prisma.serviceProvider.upsert({
-        where: { slug: 'smmstone' },
-        update: {
-          apiUrl: this.apiUrl,
-          apiKey: this.apiKey,
-          active: true
-        },
+        where: { slug: activeProvider.slug },
+        update: { active: true },
         create: {
-          name: 'SMMStone',
-          slug: 'smmstone',
-          apiUrl: this.apiUrl,
-          apiKey: this.apiKey,
-          active: true
-        }
+          name: activeProvider.displayName,
+          slug: activeProvider.slug,
+          apiUrl: this.configService.get<string>(
+            activeProvider.slug === 'smmpanelking' ? 'SMMPANELKING_API_URL' : 'SMMSTONE_API_URL',
+          ) || '',
+          apiKey: this.configService.get<string>(
+            activeProvider.slug === 'smmpanelking' ? 'SMMPANELKING_API_KEY' : 'SMMSTONE_API_KEY',
+          ) || '',
+          active: true,
+        },
       });
 
       const providerServices = await this.fetchProviderServices();

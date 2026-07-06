@@ -9,7 +9,7 @@ import { ProviderRegistryService } from '../providers/provider-registry.service'
 import { NyraWebhookService } from '../providers/nyra/nyra-webhook.service';
 import { WalletService } from '../wallet/wallet.service';
 import { PinService } from '../pin/pin.service';
-import { OrderFulfillmentService } from '../smmstone/order-fulfillment.service';
+import { OrderFulfillmentService } from '../smm/order-fulfillment.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
 import { WalletTransactionCategory, WalletTransactionType } from '@prisma/client';
 

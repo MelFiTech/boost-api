@@ -5,6 +5,7 @@ import { CreateOrderDto, PaymentMethod, OrderPlatform, ServiceType } from '../dt
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { EmailService } from '../emails/email.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
 import { resolveOrderReceiptEmail } from './order-receipt.util';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class OrdersService {
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
     private readonly appSettingsService: AppSettingsService,
+    private readonly smmRegistry: SmmProviderRegistryService,
   ) {}
 
   /**
@@ -117,6 +119,7 @@ export class OrdersService {
   private async findBestService(platform: string, service: string, quantity: number) {
     const platformName = this.resolvePlatformName(platform);
     const categoryName = this.resolveCategoryName(service);
+    const activeProviderSlug = await this.smmRegistry.getActiveSlug();
 
     const base = {
       active: true,
@@ -124,6 +127,7 @@ export class OrdersService {
       maxOrder: { gte: quantity },
       platform: { name: { equals: platformName, mode: 'insensitive' as const } },
       category: { name: { equals: categoryName, mode: 'insensitive' as const } },
+      provider: { slug: activeProviderSlug },
     };
 
     // Prefer Nigerian-targeted services when available
@@ -163,13 +167,18 @@ export class OrdersService {
    * quantities, so users never hit "no service found" errors.
    */
   async getServiceCatalog() {
-    const [exchangeRate, markupPercent] = await Promise.all([
+    const [exchangeRate, markupPercent, activeProviderSlug] = await Promise.all([
       this.appSettingsService.getUsdtExchangeRate(),
       this.appSettingsService.getSmmMarkupPercent(),
+      this.smmRegistry.getActiveSlug(),
     ]);
 
     const services = await this.prisma.service.findMany({
-      where: { active: true, providerCategory: { not: null } },
+      where: {
+        active: true,
+        providerCategory: { not: null },
+        provider: { slug: activeProviderSlug },
+      },
       include: { platform: true, category: true },
       orderBy: [{ platform: { name: 'asc' } }, { providerCategory: 'asc' }, { boostRate: 'asc' }],
     });

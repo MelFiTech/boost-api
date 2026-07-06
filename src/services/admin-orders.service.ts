@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { PaymentStatus, WalletTransactionCategory, WalletTransactionType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LOW_PROVIDER_BALANCE_ISSUE } from '../smmstone/smmstone-balance.util';
-import { OrderFulfillmentService } from '../smmstone/order-fulfillment.service';
+import { OrderFulfillmentService } from '../smm/order-fulfillment.service';
 import { WalletService } from '../wallet/wallet.service';
 import { EmailService } from '../emails/email.service';
 
