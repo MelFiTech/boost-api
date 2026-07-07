@@ -91,7 +91,12 @@ export class AdminOrdersService {
     if (order.providerOrderId && ['FAILED', 'CANCELLED'].includes(order.status)) {
       await this.prisma.order.update({
         where: { id: orderId },
-        data: { providerOrderId: null, status: 'PENDING' },
+        data: { providerOrderId: null, status: 'PENDING', fulfillmentError: null },
+      });
+    } else if (!order.providerOrderId) {
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { fulfillmentError: null },
       });
     }
 
@@ -100,6 +105,50 @@ export class AdminOrdersService {
       throw new BadRequestException(`Provider rejected the order: ${result.error}`);
     }
     return result;
+  }
+
+  /** Re-submit every paid order that never reached the provider. */
+  async refireAllPendingOrders() {
+    const orders = await this.prisma.order.findMany({
+      where: {
+        status: 'PENDING',
+        providerOrderId: null,
+        payment: { status: PaymentStatus.COMPLETED },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+    });
+
+    const results: Array<{
+      orderId: string;
+      submitted: boolean;
+      providerOrderId?: string;
+      error?: string;
+      issue?: string;
+    }> = [];
+
+    for (const order of orders) {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: { fulfillmentError: null },
+      });
+      const result = await this.orderFulfillment.fulfillOrder(order.id);
+      results.push({ orderId: order.id, ...result });
+    }
+
+    const submitted = results.filter((r) => r.submitted).length;
+    const failed = results.length - submitted;
+
+    this.logger.log(
+      `Bulk refire: ${submitted}/${results.length} orders submitted to provider`,
+    );
+
+    return {
+      attempted: results.length,
+      submitted,
+      failed,
+      results,
+    };
   }
 
   /** Reverse an order payment back into the user's wallet */

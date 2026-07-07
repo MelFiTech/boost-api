@@ -26,6 +26,14 @@ export class AdminOrdersController {
     return { success: true, data: await this.adminOrdersService.getOrdersNeedingAttention() };
   }
 
+  @Post('refire-pending')
+  @ApiOperation({
+    summary: 'Re-submit all paid orders that never reached the provider',
+  })
+  async refirePending() {
+    return { success: true, data: await this.adminOrdersService.refireAllPendingOrders() };
+  }
+
   @Post(':id/refire')
   @ApiOperation({ summary: 'Re-submit a stuck or failed order to the provider' })
   async refire(@Param('id') id: string) {

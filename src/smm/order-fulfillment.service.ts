@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   isSmmstoneInsufficientBalanceError,
@@ -16,21 +15,16 @@ export interface FulfillmentResult {
 
 /**
  * Hands paid orders to the active SMM provider — no admin approval step.
+ * Low-balance threshold is dashboard-only; the provider API decides if funds are enough.
  */
 @Injectable()
 export class OrderFulfillmentService {
   private readonly logger = new Logger(OrderFulfillmentService.name);
-  private readonly lowBalanceThreshold: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly smmRegistry: SmmProviderRegistryService,
-    private readonly configService: ConfigService,
-  ) {
-    this.lowBalanceThreshold = parseFloat(
-      this.configService.get<string>('SMMSTONE_LOW_BALANCE_THRESHOLD') || '10',
-    );
-  }
+  ) {}
 
   async fulfillOrder(orderId: string): Promise<FulfillmentResult> {
     const order = await this.prisma.order.findUnique({
@@ -47,20 +41,6 @@ export class OrderFulfillmentService {
 
     const providerSlug = order.service?.provider?.slug || (await this.smmRegistry.getActiveSlug());
     const provider = this.smmRegistry.getProvider(providerSlug);
-
-    const balanceCheck = await provider.getBalanceStatus(this.lowBalanceThreshold);
-    if (balanceCheck.lowBalance) {
-      const message = `${provider.displayName} balance is low ($${balanceCheck.balance?.toFixed(2) ?? '0.00'}). Top up the provider account to submit orders.`;
-      await this.markFulfillmentFailure(order.id, message, LOW_PROVIDER_BALANCE_ISSUE);
-      this.logger.warn(
-        `Order ${order.id} queued — ${provider.displayName} balance low ($${balanceCheck.balance}). Threshold: $${this.lowBalanceThreshold}`,
-      );
-      return {
-        submitted: false,
-        error: message,
-        issue: LOW_PROVIDER_BALANCE_ISSUE,
-      };
-    }
 
     try {
       const response = await provider.submitOrder({

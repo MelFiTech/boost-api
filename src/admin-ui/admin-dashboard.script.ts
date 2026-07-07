@@ -118,7 +118,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     const hint = smm.error
       ? 'Balance unavailable'
       : low
-        ? (smm.pendingDueToLowBalance || 0) + ' order' + ((smm.pendingDueToLowBalance || 0) === 1 ? '' : 's') + ' queued · top up ' + label
+        ? (smm.pendingDueToLowBalance || 0) + ' stuck · top up ' + label + ' (warning only)'
         : 'Provider balance healthy';
     return metricCard(label, bal, low ? 'provider danger' : 'provider', hint);
   }
@@ -148,7 +148,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     if (count > 0) {
       const lowBalanceCount = window.__attentionLowBalanceCount || 0;
       const lowBalanceNote = lowBalanceCount > 0
-        ? ' · ' + lowBalanceCount + ' queued because provider balance is low'
+        ? ' · ' + lowBalanceCount + ' previously blocked by old low-balance check'
         : '';
       banner.innerHTML = '<div class="attention-banner-inner"><div><strong>' + count + ' order' + (count === 1 ? '' : 's') + ' need attention</strong><div class="muted" style="margin-top:4px;font-size:.82rem">Paid-but-not-submitted, failed, or cancelled — refire, refund, or notify customers.' + lowBalanceNote + '</div></div><button class="btn btn-primary btn-sm" onclick="setOrdersTab(\\'attention\\')">Review now</button></div>';
       show(banner);
@@ -442,10 +442,18 @@ export function getAdminDashboardScript(apiBase: string): string {
         updateAttentionBadge(orders.length);
         renderAttentionBanner(orders.length);
         $('ordersTableWrap').innerHTML = orders.length ? (
+          '<div class="toolbar" style="margin-bottom:14px">' +
+          '<button class="btn btn-success btn-sm" id="refireAllPendingBtn">Refire all pending to provider</button>' +
+          '<span class="muted" style="margin-left:10px;font-size:.82rem">Paid orders that never got a provider reference</span>' +
+          '</div>' +
           '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Service</th><th>Amount</th><th>Issue</th><th>Status</th><th>Payment</th><th>Updated</th><th>Actions</th></tr></thead><tbody>' +
           orders.map((o) => renderAttentionRow(o)).join('') +
           '</tbody></table></div><div class="pagination"><span class="muted">' + orders.length + ' order' + (orders.length === 1 ? '' : 's') + ' need attention</span></div>'
         ) : '<div class="empty">No orders need attention right now</div>';
+        const refireAllBtn = $('refireAllPendingBtn');
+        if (refireAllBtn) {
+          refireAllBtn.onclick = () => refireAllPendingOrders();
+        }
         return;
       } else if (orderTab === 'all') {
         const res = await apiFetch('/admin/orders');
@@ -511,6 +519,24 @@ export function getAdminDashboardScript(apiBase: string): string {
       loadOrders();
       if (page === 'dashboard') loadDashboard();
     } catch (e) { toast(e.message, true); }
+  };
+
+  window.refireAllPendingOrders = async function() {
+    if (!confirm('Re-submit ALL paid orders that never reached the provider?')) return;
+    const btn = $('refireAllPendingBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await apiFetch('/admin/orders/refire-pending', { method: 'POST' });
+      const data = res.data || {};
+      toast(
+        'Refired ' + (data.submitted || 0) + '/' + (data.attempted || 0) + ' orders' +
+        ((data.failed || 0) > 0 ? ' · ' + data.failed + ' failed' : ''),
+        !!(data.failed && !data.submitted),
+      );
+      loadOrders();
+      if (page === 'dashboard') loadDashboard();
+    } catch (e) { toast(e.message, true); }
+    if (btn) btn.disabled = false;
   };
 
   window.refundAttentionOrder = async function(id) {
@@ -630,9 +656,7 @@ export function getAdminDashboardScript(apiBase: string): string {
     if (!el) return;
     el.innerHTML =
       (bal.lowBalance
-        ? '<div class="attention-banner" style="margin-bottom:14px"><div class="attention-banner-inner"><div><strong>' + label + ' balance is low</strong><div class="muted" style="margin-top:4px;font-size:.82rem">' +
-          (bal.pendingDueToLowBalance || 0) + ' paid order' + ((bal.pendingDueToLowBalance || 0) === 1 ? '' : 's') +
-          ' waiting to be submitted. Top up the provider, then refire from Orders → Needs attention.</div></div></div></div>'
+          ? '<div class="attention-banner" style="margin-bottom:14px"><div class="attention-banner-inner"><div><strong>' + label + ' balance is low</strong><div class="muted" style="margin-top:4px;font-size:.82rem">Admin warning only — orders still submit unless the provider rejects. Top up when convenient.</div></div></div></div>'
         : '') +
       '<p class="muted" style="margin-bottom:14px">Sync services from ' + label + ' and check provider balance.</p>' +
       '<div class="toolbar"><button class="btn btn-primary btn-sm sync-smm-btn" data-sync-path="' + syncPath + '">Sync services</button><button class="btn btn-ghost btn-sm refresh-smm-btn">Refresh balance</button></div>' +
