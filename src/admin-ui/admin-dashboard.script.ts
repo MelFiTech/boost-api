@@ -443,8 +443,8 @@ export function getAdminDashboardScript(apiBase: string): string {
         renderAttentionBanner(orders.length);
         $('ordersTableWrap').innerHTML = orders.length ? (
           '<div class="toolbar" style="margin-bottom:14px">' +
-          '<button class="btn btn-success btn-sm" id="refireAllPendingBtn">Refire all pending to provider</button>' +
-          '<span class="muted" style="margin-left:10px;font-size:.82rem">Paid orders that never got a provider reference</span>' +
+          '<button class="btn btn-success btn-sm" id="refireAllPendingBtn">Submit all missing provider refs</button>' +
+          '<span class="muted" style="margin-left:10px;font-size:.82rem">Paid pending or completed orders without a provider reference</span>' +
           '</div>' +
           '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Service</th><th>Amount</th><th>Issue</th><th>Status</th><th>Payment</th><th>Updated</th><th>Actions</th></tr></thead><tbody>' +
           orders.map((o) => renderAttentionRow(o)).join('') +
@@ -511,10 +511,14 @@ export function getAdminDashboardScript(apiBase: string): string {
   };
 
   window.refireAttentionOrder = async function(id) {
-    if (!confirm('Re-submit this order to the SMM provider?')) return;
+    if (!confirm('Submit this order to the SMM provider and poll status until settled?')) return;
     try {
       const res = await apiFetch('/admin/orders/' + id + '/refire', { method: 'POST' });
-      toast('Order refired' + (res.data?.providerOrderId ? ' · ref ' + res.data.providerOrderId : ''));
+      const d = res.data || {};
+      const statusNote = d.status ? ' · ' + d.status : '';
+      const refNote = d.providerOrderId ? ' · ref ' + d.providerOrderId : '';
+      const processingNote = d.stillProcessing ? ' (still processing)' : '';
+      toast('Order submitted' + refNote + statusNote + processingNote);
       closeModal();
       loadOrders();
       if (page === 'dashboard') loadDashboard();
@@ -522,14 +526,14 @@ export function getAdminDashboardScript(apiBase: string): string {
   };
 
   window.refireAllPendingOrders = async function() {
-    if (!confirm('Re-submit ALL paid orders that never reached the provider?')) return;
+    if (!confirm('Submit ALL paid orders (pending or completed) that are missing a provider reference?')) return;
     const btn = $('refireAllPendingBtn');
     if (btn) btn.disabled = true;
     try {
       const res = await apiFetch('/admin/orders/refire-pending', { method: 'POST' });
       const data = res.data || {};
       toast(
-        'Refired ' + (data.submitted || 0) + '/' + (data.attempted || 0) + ' orders' +
+        'Submitted ' + (data.submitted || 0) + '/' + (data.attempted || 0) + ' orders' +
         ((data.failed || 0) > 0 ? ' · ' + data.failed + ' failed' : ''),
         !!(data.failed && !data.submitted),
       );
@@ -604,10 +608,15 @@ export function getAdminDashboardScript(apiBase: string): string {
   };
 
   window.fulfillOrder = async function(id) {
-    if (!confirm('Approve and mark this order as fulfilled?')) return;
+    if (!confirm('Approve payment, submit to the SMM provider, and wait for completion?')) return;
     try {
-      await apiFetch('/admin/orders/' + id + '/fulfill', { method: 'POST' });
-      toast('Order fulfilled'); closeModal(); loadOrders();
+      const res = await apiFetch('/admin/orders/' + id + '/fulfill', { method: 'POST' });
+      const d = res.fulfillment || res.data || {};
+      const statusNote = d.status ? ' · ' + d.status : '';
+      const refNote = d.providerOrderId ? ' · ref ' + d.providerOrderId : '';
+      const processingNote = d.stillProcessing ? ' (still processing)' : '';
+      toast((res.message || 'Order submitted') + refNote + statusNote + processingNote);
+      closeModal(); loadOrders();
     } catch (e) { toast(e.message, true); }
   };
 

@@ -163,4 +163,58 @@ export class SmmOrderStatusService {
     }
     return chunks;
   }
+
+  /** Pull live status from the provider for one order and apply it locally. */
+  async syncOrderStatus(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { user: true, service: { include: { provider: true } } },
+    });
+
+    if (!order?.providerOrderId) {
+      return { status: order?.status ?? 'PENDING', providerStatus: null };
+    }
+
+    const slug = order.service?.provider?.slug || 'smmstone';
+    const provider = this.smmRegistry.getProvider(slug);
+    const statusData = await provider.getOrderStatus(parseInt(order.providerOrderId, 10));
+    await this.updateOrderStatus(order, statusData);
+
+    const updated = await this.prisma.order.findUnique({ where: { id: orderId } });
+    const providerStatus =
+      typeof statusData === 'object' && statusData && 'status' in statusData
+        ? String((statusData as { status?: string }).status || '')
+        : null;
+
+    return {
+      status: updated?.status ?? order.status,
+      providerStatus,
+    };
+  }
+
+  /**
+   * Poll provider status until the order reaches a terminal state or attempts run out.
+   */
+  async pollOrderUntilSettled(orderId: string, maxAttempts = 12, intervalMs = 5000) {
+    const terminal = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const { status, providerStatus } = await this.syncOrderStatus(orderId);
+      if (terminal.has(status)) {
+        return { status, providerStatus, polls: attempt, settled: true };
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
+
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    return {
+      status: order?.status ?? 'PROCESSING',
+      providerStatus: null,
+      polls: maxAttempts,
+      settled: false,
+      stillProcessing: true,
+    };
+  }
 }

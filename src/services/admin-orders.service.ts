@@ -1,15 +1,28 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { PaymentStatus, WalletTransactionCategory, WalletTransactionType } from '@prisma/client';
+import { OrderStatus, PaymentStatus, WalletTransactionCategory, WalletTransactionType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LOW_PROVIDER_BALANCE_ISSUE } from '../smmstone/smmstone-balance.util';
 import { OrderFulfillmentService } from '../smm/order-fulfillment.service';
+import { SmmOrderStatusService } from '../smm/smm-order-status.service';
 import { WalletService } from '../wallet/wallet.service';
 import { EmailService } from '../emails/email.service';
 
+type AdminSubmitResult = {
+  submitted: boolean;
+  alreadySubmitted?: boolean;
+  providerOrderId?: string;
+  status?: string;
+  providerStatus?: string | null;
+  settled?: boolean;
+  stillProcessing?: boolean;
+  polls?: number;
+  error?: string;
+  issue?: string;
+};
+
 /**
  * Admin recovery tooling for the hands-off fulfillment flow. Orders go to
- * SMMStone automatically on payment; the admin only deals with the ones
- * that got stuck (paid but not submitted) or failed at the provider.
+ * the active SMM provider automatically on payment; admin handles stuck orders.
  */
 @Injectable()
 export class AdminOrdersService {
@@ -18,22 +31,25 @@ export class AdminOrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orderFulfillment: OrderFulfillmentService,
+    private readonly orderStatus: SmmOrderStatusService,
     private readonly walletService: WalletService,
     private readonly emailService: EmailService,
   ) {}
+
+  private ordersMissingProviderWhere() {
+    return {
+      providerOrderId: null,
+      status: { in: [OrderStatus.PENDING, OrderStatus.COMPLETED] as OrderStatus[] },
+      payment: { status: PaymentStatus.COMPLETED },
+    };
+  }
 
   /** Paid-but-unsubmitted, failed, or cancelled orders that may need action */
   async getOrdersNeedingAttention() {
     const orders = await this.prisma.order.findMany({
       where: {
         OR: [
-          // Paid but never reached the provider (auto-fulfillment failed)
-          {
-            status: 'PENDING',
-            providerOrderId: null,
-            payment: { status: PaymentStatus.COMPLETED },
-          },
-          // Provider reported failure/cancellation
+          this.ordersMissingProviderWhere(),
           { status: { in: ['FAILED', 'CANCELLED'] } },
         ],
       },
@@ -51,6 +67,9 @@ export class AdminOrdersService {
       const lowBalanceQueued =
         order.fulfillmentError?.includes(LOW_PROVIDER_BALANCE_ISSUE) ?? false;
       let issue = !order.providerOrderId ? 'NOT_SUBMITTED' : order.status;
+      if (order.status === 'COMPLETED' && !order.providerOrderId) {
+        issue = 'NOT_SUBMITTED';
+      }
       if (lowBalanceQueued) issue = LOW_PROVIDER_BALANCE_ISSUE;
 
       return {
@@ -73,6 +92,32 @@ export class AdminOrdersService {
     });
   }
 
+  /**
+   * Approve (mark paid if needed), submit to provider, set PROCESSING, poll until settled.
+   */
+  async approveAndFulfillOrder(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payment: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status === 'CANCELLED' || order.status === 'REFUNDED') {
+      throw new BadRequestException(`Cannot fulfill a ${order.status.toLowerCase()} order`);
+    }
+    if (order.status === 'COMPLETED' && order.providerOrderId) {
+      throw new BadRequestException('Order is already completed with the provider');
+    }
+
+    if (order.payment && order.payment.status !== PaymentStatus.COMPLETED) {
+      await this.prisma.payment.update({
+        where: { id: order.payment.id },
+        data: { status: PaymentStatus.COMPLETED, updatedAt: new Date() },
+      });
+    }
+
+    return this.submitToProviderAndPoll(orderId, { poll: true });
+  }
+
   /** Re-submit a stuck or failed order to the provider */
   async refireOrder(orderId: string) {
     const order = await this.prisma.order.findUnique({
@@ -87,34 +132,37 @@ export class AdminOrdersService {
       throw new BadRequestException('Order was already refunded');
     }
 
-    // Allow refiring failed/cancelled orders by clearing the old provider ref
+    if (
+      order.providerOrderId &&
+      !['FAILED', 'CANCELLED'].includes(order.status) &&
+      order.status !== 'COMPLETED'
+    ) {
+      const poll = await this.orderStatus.pollOrderUntilSettled(orderId);
+      return {
+        alreadySubmitted: true,
+        providerOrderId: order.providerOrderId,
+        ...poll,
+      };
+    }
+
     if (order.providerOrderId && ['FAILED', 'CANCELLED'].includes(order.status)) {
       await this.prisma.order.update({
         where: { id: orderId },
         data: { providerOrderId: null, status: 'PENDING', fulfillmentError: null },
       });
-    } else if (!order.providerOrderId) {
-      await this.prisma.order.update({
-        where: { id: orderId },
-        data: { fulfillmentError: null },
-      });
     }
 
-    const result = await this.orderFulfillment.fulfillOrder(orderId);
-    if (!result.submitted) {
+    const result = await this.submitToProviderAndPoll(orderId, { poll: true });
+    if (!result.submitted && !result.alreadySubmitted) {
       throw new BadRequestException(`Provider rejected the order: ${result.error}`);
     }
     return result;
   }
 
-  /** Re-submit every paid order that never reached the provider. */
-  async refireAllPendingOrders() {
+  /** Submit every paid order missing a provider reference (pending or wrongly completed). */
+  async submitOrdersMissingProvider() {
     const orders = await this.prisma.order.findMany({
-      where: {
-        status: 'PENDING',
-        providerOrderId: null,
-        payment: { status: PaymentStatus.COMPLETED },
-      },
+      where: this.ordersMissingProviderWhere(),
       orderBy: { createdAt: 'asc' },
       take: 100,
     });
@@ -123,31 +171,118 @@ export class AdminOrdersService {
       orderId: string;
       submitted: boolean;
       providerOrderId?: string;
+      status?: string;
       error?: string;
       issue?: string;
     }> = [];
 
     for (const order of orders) {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: { fulfillmentError: null },
-      });
-      const result = await this.orderFulfillment.fulfillOrder(order.id);
-      results.push({ orderId: order.id, ...result });
+      try {
+        const result = await this.submitToProviderAndPoll(order.id, {
+          poll: false,
+          syncOnce: true,
+        });
+        results.push({
+          orderId: order.id,
+          submitted: !!result.submitted,
+          providerOrderId: result.providerOrderId,
+          status: result.status,
+          error: result.error,
+          issue: result.issue,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ orderId: order.id, submitted: false, error: message });
+      }
     }
 
     const submitted = results.filter((r) => r.submitted).length;
     const failed = results.length - submitted;
 
     this.logger.log(
-      `Bulk refire: ${submitted}/${results.length} orders submitted to provider`,
+      `Bulk provider submit: ${submitted}/${results.length} orders submitted`,
     );
 
+    return { attempted: results.length, submitted, failed, results };
+  }
+
+  /** @deprecated Use submitOrdersMissingProvider */
+  async refireAllPendingOrders() {
+    return this.submitOrdersMissingProvider();
+  }
+
+  private async submitToProviderAndPoll(
+    orderId: string,
+    options: { poll?: boolean; syncOnce?: boolean } = {},
+  ): Promise<AdminSubmitResult> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payment: true },
+    });
+    if (!order) {
+      return { submitted: false, error: 'Order not found' };
+    }
+
+    if (order.providerOrderId) {
+      const poll = options.poll
+        ? await this.orderStatus.pollOrderUntilSettled(orderId)
+        : options.syncOnce
+          ? await this.orderStatus.syncOrderStatus(orderId)
+          : { status: order.status };
+      return {
+        alreadySubmitted: true,
+        providerOrderId: order.providerOrderId,
+        submitted: true,
+        status: poll.status,
+        providerStatus: 'providerStatus' in poll ? poll.providerStatus : undefined,
+      };
+    }
+
+    if (order.status === 'COMPLETED') {
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { status: 'PENDING', fulfillmentError: null },
+      });
+    } else {
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { fulfillmentError: null },
+      });
+    }
+
+    const fulfillment = await this.orderFulfillment.fulfillOrder(orderId);
+    if (!fulfillment.submitted) {
+      return fulfillment;
+    }
+
+    if (options.poll) {
+      const poll = await this.orderStatus.pollOrderUntilSettled(orderId);
+      return {
+        submitted: true,
+        providerOrderId: fulfillment.providerOrderId,
+        status: poll.status,
+        providerStatus: poll.providerStatus,
+        settled: poll.settled,
+        stillProcessing: poll.stillProcessing,
+        polls: poll.polls,
+      };
+    }
+
+    if (options.syncOnce) {
+      const sync = await this.orderStatus.syncOrderStatus(orderId);
+      return {
+        submitted: true,
+        providerOrderId: fulfillment.providerOrderId,
+        status: sync.status,
+        providerStatus: sync.providerStatus,
+      };
+    }
+
+    const updated = await this.prisma.order.findUnique({ where: { id: orderId } });
     return {
-      attempted: results.length,
-      submitted,
-      failed,
-      results,
+      submitted: true,
+      providerOrderId: fulfillment.providerOrderId,
+      status: updated?.status ?? 'PROCESSING',
     };
   }
 
@@ -204,7 +339,6 @@ export class AdminOrdersService {
     });
     if (!order) throw new NotFoundException('Order not found');
 
-    // Priority: explicit email → account email → email captured at payment
     const to =
       email || order.user?.email || order.payment?.customerEmail || order.payment?.transactions[0]?.customerEmail || null;
     if (!to) {

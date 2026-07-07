@@ -28,10 +28,11 @@ export class AdminOrdersController {
 
   @Post('refire-pending')
   @ApiOperation({
-    summary: 'Re-submit all paid orders that never reached the provider',
+    summary:
+      'Submit all paid orders missing a provider reference (pending or completed without provider id)',
   })
   async refirePending() {
-    return { success: true, data: await this.adminOrdersService.refireAllPendingOrders() };
+    return { success: true, data: await this.adminOrdersService.submitOrdersMissingProvider() };
   }
 
   @Post(':id/refire')

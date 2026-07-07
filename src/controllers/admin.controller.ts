@@ -14,6 +14,7 @@ import { NotificationService } from '../services/notification.service';
 import { AdminDashboardService, DashboardPeriod } from '../services/admin-dashboard.service';
 import { AppSettingsService } from '../app-settings/app-settings.service';
 import { WalletService } from '../wallet/wallet.service';
+import { AdminOrdersService } from '../services/admin-orders.service';
 
 class UpdateRatesDto {
   @IsOptional()
@@ -63,6 +64,7 @@ export class AdminController {
     private readonly adminDashboardService: AdminDashboardService,
     private readonly appSettingsService: AppSettingsService,
     private readonly walletService: WalletService,
+    private readonly adminOrdersService: AdminOrdersService,
   ) {}
 
   @Get('rates')
@@ -619,89 +621,61 @@ export class AdminController {
     }
   })
   async fulfillOrder(@Param('orderId') orderId: string) {
+    const result = await this.adminOrdersService.approveAndFulfillOrder(orderId);
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        service: {
-          include: {
-            platform: true,
-            provider: true,
-          }
-        },
-        payment: true
-      }
+        service: { include: { platform: true, provider: true } },
+        payment: true,
+      },
     });
 
     if (!order) {
-      throw new Error('Order not found');
+      throw new NotFoundException('Order not found');
     }
 
-    // Check if order is already completed
-    if (order.status === 'COMPLETED') {
-      throw new Error('Order is already completed');
+    if (!result.submitted && !result.alreadySubmitted) {
+      throw new BadRequestException(
+        `Provider rejected the order: ${result.error || 'unknown error'}`,
+      );
     }
-
-    // Check if order is cancelled
-    if (order.status === 'CANCELLED') {
-      throw new Error('Cannot fulfill a cancelled order');
-    }
-
-    // Use a transaction to update both order and payment status atomically
-    const updatedOrder = await this.prisma.$transaction(async (prisma) => {
-      // Update payment status to completed if it exists
-      if (order.payment) {
-        await prisma.payment.update({
-          where: { id: order.payment.id },
-          data: {
-            status: 'COMPLETED',
-            updatedAt: new Date()
-          }
-        });
-      }
-
-      // Update order status to completed
-      return prisma.order.update({
-        where: { id: orderId },
-        data: {
-          status: 'COMPLETED',
-          updatedAt: new Date()
-        },
-        include: {
-          service: {
-            include: {
-              platform: true
-            }
-          },
-          payment: true
-        }
-      });
-    });
 
     const exchangeRate = await this.appSettingsService.getUsdtExchangeRate();
+    const statusMessage =
+      result.status === 'COMPLETED'
+        ? 'Order submitted to provider and completed'
+        : result.stillProcessing
+          ? 'Order submitted to provider — still processing (status will update automatically)'
+          : 'Order submitted to provider';
 
     return {
       success: true,
-      message: 'Order fulfilled by admin and marked as completed',
+      message: statusMessage,
+      fulfillment: result,
       order: {
-        id: updatedOrder.id,
-        status: updatedOrder.status,
-        platform: updatedOrder.service?.platform?.name || 'Unknown',
-        serviceName: updatedOrder.service?.name || 'Unknown Service',
-        quantity: updatedOrder.quantity,
-        socialUrl: updatedOrder.link,
+        id: order.id,
+        status: order.status,
+        providerOrderId: order.providerOrderId,
+        platform: order.service?.platform?.name || 'Unknown',
+        serviceName: order.service?.name || 'Unknown Service',
+        quantity: order.quantity,
+        socialUrl: order.link,
         pricing: {
-          amountNGN: parseFloat(updatedOrder.price.toString()),
-          amountUSDT: parseFloat((updatedOrder.price / exchangeRate).toFixed(4)),
-          providerRateUSDT: updatedOrder.service?.providerRate || 0
+          amountNGN: parseFloat(order.price.toString()),
+          amountUSDT: parseFloat((order.price / exchangeRate).toFixed(4)),
+          providerRateUSDT: order.service?.providerRate || 0,
         },
-        payment: updatedOrder.payment ? {
-          id: updatedOrder.payment.id,
-          status: updatedOrder.payment.status,
-          amountPaid: updatedOrder.payment.amount,
-          currency: updatedOrder.payment.currency
-        } : null,
-        fulfilledAt: updatedOrder.updatedAt
-      }
+        payment: order.payment
+          ? {
+              id: order.payment.id,
+              status: order.payment.status,
+              amountPaid: order.payment.amount,
+              currency: order.payment.currency,
+            }
+          : null,
+        fulfilledAt: order.updatedAt,
+      },
     };
   }
 
