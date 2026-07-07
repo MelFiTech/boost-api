@@ -61,7 +61,7 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     NotificationPreferencesModule,
     StorageModule,
   ],
-  controllers: [AppController, SMMController, OrdersController, PaymentController, AdminController, AdminOrdersController, UserController, UserOrdersController],
+  controllers: [AppController, SMMController, OrdersController, PaymentController, AdminOrdersController, AdminController, UserController, UserOrdersController],
   providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, NotificationService, UserService, SmmstoneService, AdminDashboardService, AdminOrdersService],
 })
 export class AppModule implements NestModule {

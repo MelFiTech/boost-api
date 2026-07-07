@@ -1154,6 +1154,15 @@ export class AdminController {
     };
   }
 
+  @Get('orders/attention')
+  @ApiOperation({ summary: 'Orders needing admin action: paid-but-stuck, failed, or cancelled' })
+  async getOrdersNeedingAttention() {
+    return {
+      success: true,
+      data: await this.adminOrdersService.getOrdersNeedingAttention(),
+    };
+  }
+
   @Get('orders/:orderId')
   @ApiOperation({ summary: 'Get a single order with payment details' })
   async getOrderById(@Param('orderId') orderId: string) {

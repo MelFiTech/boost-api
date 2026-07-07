@@ -112,6 +112,42 @@ export function getAdminDashboardScript(apiBase: string): string {
     return '<span class="badge ' + cls + '">' + label + '</span>';
   }
 
+  let rowMenuCounter = 0;
+
+  function escAttr(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+
+  function closeAllRowMenus() {
+    document.querySelectorAll('.row-menu.open').forEach((el) => el.classList.remove('open'));
+  }
+
+  window.closeAllRowMenus = closeAllRowMenus;
+
+  window.toggleRowMenu = function(menuId, event) {
+    if (event) event.stopPropagation();
+    const el = document.getElementById(menuId);
+    if (!el) return;
+    const wasOpen = el.classList.contains('open');
+    closeAllRowMenus();
+    if (!wasOpen) el.classList.add('open');
+  };
+
+  function renderRowActionsCell(items) {
+    rowMenuCounter += 1;
+    const id = 'rowMenu' + rowMenuCounter;
+    const menuItems = items.map((item) => {
+      if (item.divider) return '<div class="row-menu-divider"></div>';
+      const onclick = item.onclick ? ' onclick="' + item.onclick + ';closeAllRowMenus()"' : '';
+      const cls = item.danger ? ' row-menu-item-danger' : item.primary ? ' row-menu-item-primary' : '';
+      const icon = item.icon ? '<i class="ph ' + item.icon + '"></i>' : '';
+      return '<button type="button" class="row-menu-item' + cls + '"' + onclick + '>' + icon + '<span>' + item.label + '</span></button>';
+    }).join('');
+    return '<td class="td-actions"><div class="row-menu" id="' + id + '">' +
+      '<button type="button" class="row-menu-btn" aria-label="Actions" onclick="toggleRowMenu(\\'' + id + '\\', event)"><i class="ph ph-dots-three-vertical"></i></button>' +
+      '<div class="row-menu-dropdown">' + menuItems + '</div></div></td>';
+  }
+
   function smmProviderMetricCard(label, smm) {
     const low = !!smm.lowBalance;
     const bal = smm.error ? '—' : usd(smm.balance);
@@ -393,24 +429,30 @@ export function getAdminDashboardScript(apiBase: string): string {
     const customer = o.isGuest
       ? '<div class="cell-title">Guest</div><div class="cell-sub">' + (o.userEmail || 'No email on file') + '</div>'
       : '<div class="cell-title">' + (o.userEmail || 'Registered user') + '</div><div class="cell-sub">Account holder</div>';
-    const refundBtn = o.isGuest
-      ? ''
-      : '<button class="btn btn-danger btn-sm" onclick="refundAttentionOrder(\\'' + o.id + '\\')">Refund</button>';
-    const actions = '<div class="action-group">' +
-      '<button class="btn btn-success btn-sm" onclick="refireAttentionOrder(\\'' + o.id + '\\')">Refire</button>' +
-      refundBtn +
-      '<button class="btn btn-ghost btn-sm" onclick="openNotifyOrder(\\'' + o.id + '\\', \\'' + String(o.userEmail || '').replace(/'/g, '') + '\\')">Notify</button>' +
-      '<button class="btn btn-ghost btn-sm" onclick="openAttentionOrder(\\'' + o.id + '\\')">Details</button>' +
-      '</div>';
-    return '<tr><td class="cell-title">' + shortId(o.id) + '</td>' +
+    const emailEsc = String(o.userEmail || '').replace(/'/g, "\\'");
+    const errorHint = o.fulfillmentError
+      ? '<div class="cell-sub cell-error" title="' + escAttr(o.fulfillmentError) + '">' + escAttr(o.fulfillmentError) + '</div>'
+      : '';
+    const menuItems = [
+      { label: 'View details', icon: 'ph-eye', onclick: 'openAttentionOrder(\\'' + o.id + '\\')' },
+      { label: 'Submit to provider', icon: 'ph-paper-plane-tilt', onclick: 'refireAttentionOrder(\\'' + o.id + '\\')', primary: true },
+    ];
+    if (!o.isGuest) {
+      menuItems.push({ divider: true });
+      menuItems.push({ label: 'Refund to wallet', icon: 'ph-arrow-counter-clockwise', onclick: 'refundAttentionOrder(\\'' + o.id + '\\')', danger: true });
+    }
+    menuItems.push({ divider: true });
+    menuItems.push({ label: 'Notify customer', icon: 'ph-envelope-simple', onclick: 'openNotifyOrder(\\'' + o.id + '\\', \\'' + emailEsc + '\\')' });
+
+    return '<tr>' +
+      '<td><div class="order-cell"><div class="order-id">' + shortId(o.id) + '</div>' + errorHint + '</div></td>' +
       '<td>' + customer + '</td>' +
-      '<td><div class="cell-title">' + (o.service || '—') + '</div><div class="cell-sub">' + (o.platform || '') + ' · ' + (o.quantity || 0) + ' qty</div></td>' +
-      '<td>' + money(o.price) + '</td>' +
-      '<td>' + issueBadge(o.issue) + '</td>' +
-      '<td>' + badge(o.status) + '</td>' +
-      '<td>' + badge(o.paymentStatus) + '</td>' +
+      '<td><div class="cell-title">' + (o.service || '—') + '</div><div class="cell-sub">' + (o.platform || '') + ' · ' + (o.quantity || 0).toLocaleString() + ' qty</div></td>' +
+      '<td><strong>' + money(o.price) + '</strong></td>' +
+      '<td><div class="status-stack">' + issueBadge(o.issue) + badge(o.status) + '</div></td>' +
       '<td class="muted">' + fmtDate(o.updatedAt || o.createdAt) + '</td>' +
-      '<td>' + actions + '</td></tr>';
+      renderRowActionsCell(menuItems) +
+      '</tr>';
   }
 
   function renderOrderRow(o, showActions) {
@@ -421,14 +463,24 @@ export function getAdminDashboardScript(apiBase: string): string {
     if (progress && progress.progressPercentage != null) {
       progressHtml = '<div class="progress-mini"><div class="progress-mini-fill" style="width:' + progress.progressPercentage + '%"></div></div><div class="cell-sub">' + progress.progressPercentage + '% delivered</div>';
     }
-    const actions = showActions ? '<button class="btn btn-ghost btn-sm" onclick="openOrder(\\'' + o.id + '\\')">Manage</button>' : '<button class="btn btn-ghost btn-sm" onclick="openOrder(\\'' + o.id + '\\')">View</button>';
-    return '<tr><td class="cell-title">' + shortId(o.id) + '</td>' +
+    const menuItems = [
+      { label: 'View order', icon: 'ph-eye', onclick: 'openOrder(\\'' + o.id + '\\')' },
+    ];
+    if (showActions && String(o.status || '').toUpperCase() === 'PENDING') {
+      menuItems.push({ divider: true });
+      menuItems.push({ label: 'Approve & fulfill', icon: 'ph-check-circle', onclick: 'fulfillOrder(\\'' + o.id + '\\')', primary: true });
+      menuItems.push({ label: 'Decline order', icon: 'ph-x-circle', onclick: 'declineOrder(\\'' + o.id + '\\')', danger: true });
+    }
+
+    return '<tr>' +
+      '<td><div class="order-id">' + shortId(o.id) + '</div></td>' +
       '<td><div class="cell-title">' + (user.username || user.email || '—') + '</div><div class="cell-sub">' + (user.email || '') + '</div></td>' +
-      '<td><div class="cell-title">' + (o.serviceName || '—') + '</div><div class="cell-sub">' + (o.platform || '') + ' · ' + (o.quantity || 0) + ' qty</div>' + progressHtml + '</td>' +
-      '<td>' + money(pricing.amountNGN || o.amount) + '</td>' +
+      '<td><div class="cell-title">' + (o.serviceName || '—') + '</div><div class="cell-sub">' + (o.platform || '') + ' · ' + (o.quantity || 0).toLocaleString() + ' qty</div>' + progressHtml + '</td>' +
+      '<td><strong>' + money(pricing.amountNGN || o.amount) + '</strong></td>' +
       '<td>' + badge(o.status) + '</td>' +
       '<td class="muted">' + fmtDate(o.createdAt) + '</td>' +
-      '<td>' + actions + '</td></tr>';
+      renderRowActionsCell(menuItems) +
+      '</tr>';
   }
 
   async function loadOrders() {
@@ -442,11 +494,13 @@ export function getAdminDashboardScript(apiBase: string): string {
         updateAttentionBadge(orders.length);
         renderAttentionBanner(orders.length);
         $('ordersTableWrap').innerHTML = orders.length ? (
-          '<div class="toolbar" style="margin-bottom:14px">' +
-          '<button class="btn btn-success btn-sm" id="refireAllPendingBtn">Submit all missing provider refs</button>' +
-          '<span class="muted" style="margin-left:10px;font-size:.82rem">Paid pending or completed orders without a provider reference</span>' +
+          '<div class="orders-toolbar">' +
+          '<div class="orders-toolbar-copy"><strong>Recover stuck orders</strong><p class="muted">Paid pending or completed orders without a provider reference</p></div>' +
+          '<button class="btn btn-primary btn-sm" id="refireAllPendingBtn"><i class="ph ph-paper-plane-tilt"></i> Submit all</button>' +
           '</div>' +
-          '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Service</th><th>Amount</th><th>Issue</th><th>Status</th><th>Payment</th><th>Updated</th><th>Actions</th></tr></thead><tbody>' +
+          '<div class="table-wrap"><table class="data-table data-table-orders"><thead><tr>' +
+          '<th>Order</th><th>Customer</th><th>Service</th><th>Amount</th><th>State</th><th>Updated</th><th class="th-actions" aria-label="Actions"></th>' +
+          '</tr></thead><tbody>' +
           orders.map((o) => renderAttentionRow(o)).join('') +
           '</tbody></table></div><div class="pagination"><span class="muted">' + orders.length + ' order' + (orders.length === 1 ? '' : 's') + ' need attention</span></div>'
         ) : '<div class="empty">No orders need attention right now</div>';
@@ -470,7 +524,9 @@ export function getAdminDashboardScript(apiBase: string): string {
       }
       const showActions = orderTab === 'pending' || orderTab === 'all';
       $('ordersTableWrap').innerHTML = orders.length ? (
-        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>User</th><th>Service</th><th>Amount</th><th>Status</th><th>Date</th><th></th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="data-table data-table-orders"><thead><tr>' +
+        '<th>Order</th><th>User</th><th>Service</th><th>Amount</th><th>Status</th><th>Date</th><th class="th-actions" aria-label="Actions"></th>' +
+        '</tr></thead><tbody>' +
         orders.map((o) => renderOrderRow(o, showActions)).join('') +
         '</tbody></table></div><div class="pagination"><span class="muted">' + orders.length + ' orders</span></div>'
       ) : '<div class="empty">No orders in this view</div>';
@@ -485,18 +541,17 @@ export function getAdminDashboardScript(apiBase: string): string {
       const o = (res.data || []).find((x) => x.id === id);
       if (!o) { toast('Order not found in attention list', true); return; }
       const refundAction = o.isGuest
-        ? '<div class="muted" style="font-size:.82rem">Guest order — refund is unavailable. Use notify instead.</div>'
-        : '<button class="btn btn-danger btn-sm" onclick="refundAttentionOrder(\\'' + id + '\\')">Refund to wallet</button>';
-      const actions = '<div class="toolbar">' +
-        '<button class="btn btn-success btn-sm" onclick="refireAttentionOrder(\\'' + id + '\\')">Refire to provider</button>' +
+        ? '<p class="muted" style="font-size:.82rem;width:100%">Guest order — refund unavailable. Use notify instead.</p>'
+        : '<button class="btn btn-danger btn-sm" onclick="refundAttentionOrder(\\'' + id + '\\')"><i class="ph ph-arrow-counter-clockwise"></i> Refund</button>';
+      const actions = '<div class="modal-actions">' +
+        '<button class="btn btn-primary btn-sm" onclick="refireAttentionOrder(\\'' + id + '\\')"><i class="ph ph-paper-plane-tilt"></i> Submit to provider</button>' +
         refundAction +
-        '<button class="btn btn-ghost btn-sm" onclick="openNotifyOrder(\\'' + id + '\\', \\'' + String(o.userEmail || '').replace(/'/g, '') + '\\')">Notify customer</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="openNotifyOrder(\\'' + id + '\\', \\'' + String(o.userEmail || '').replace(/'/g, '') + '\\')"><i class="ph ph-envelope-simple"></i> Notify</button>' +
         '</div>';
       $('modal').innerHTML = '<div class="modal"><div class="modal-head"><h3>Attention · ' + shortId(id) + '</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button></div><div class="modal-body">' +
         '<div class="detail-grid">' +
         '<div><div class="field-label">Customer</div><div class="cell-title">' + (o.isGuest ? 'Guest' : 'Registered') + '</div><div class="cell-sub">' + (o.userEmail || '—') + '</div></div>' +
-        '<div><div class="field-label">Issue</div>' + issueBadge(o.issue) + '</div>' +
-        '<div><div class="field-label">Status</div>' + badge(o.status) + '</div>' +
+        '<div><div class="field-label">State</div><div class="status-stack">' + issueBadge(o.issue) + badge(o.status) + '</div></div>' +
         '<div><div class="field-label">Payment</div>' + badge(o.paymentStatus) + '</div>' +
         '<div><div class="field-label">Service</div><div>' + (o.service || '—') + '</div></div>' +
         '<div><div class="field-label">Platform</div><div>' + (o.platform || '—') + '</div></div>' +
@@ -589,7 +644,7 @@ export function getAdminDashboardScript(apiBase: string): string {
       const payment = o.payment || {};
       const canFulfill = o.status === 'PENDING';
       const actions = canFulfill
-        ? '<button class="btn btn-success btn-sm" onclick="fulfillOrder(\\'' + id + '\\')">Approve &amp; fulfill</button><button class="btn btn-danger btn-sm" onclick="declineOrder(\\'' + id + '\\')">Decline</button>'
+        ? '<div class="modal-actions"><button class="btn btn-primary btn-sm" onclick="fulfillOrder(\\'' + id + '\\')"><i class="ph ph-check-circle"></i> Approve &amp; fulfill</button><button class="btn btn-danger btn-sm" onclick="declineOrder(\\'' + id + '\\')"><i class="ph ph-x-circle"></i> Decline</button></div>'
         : '';
       $('modal').innerHTML = '<div class="modal"><div class="modal-head"><h3>Order ' + shortId(id) + '</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button></div><div class="modal-body">' +
         '<div class="detail-grid">' +
@@ -602,7 +657,7 @@ export function getAdminDashboardScript(apiBase: string): string {
         '<div class="full"><div class="field-label">Social URL</div><div style="word-break:break-all">' + (o.socialUrl || '—') + '</div></div>' +
         '<div><div class="field-label">Payment</div><div>' + badge(payment.status || 'N/A') + '</div></div>' +
         '<div><div class="field-label">Created</div><div class="muted">' + fmtDate(o.createdAt) + '</div></div>' +
-        '</div><div class="toolbar">' + actions + '</div></div></div>';
+        '</div>' + actions + '</div></div>';
       show($('modal'));
     } catch (e) { toast(e.message, true); }
   };
@@ -1588,9 +1643,13 @@ export function getAdminDashboardScript(apiBase: string): string {
       document.querySelectorAll('#orderTabs .tab').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       orderTab = btn.dataset.orderTab;
+      closeAllRowMenus();
       loadOrders();
     });
   });
+
+  document.addEventListener('click', closeAllRowMenus);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllRowMenus(); });
 
   $('usersSearchBtn').addEventListener('click', () => { usersPage = 1; loadUsers(); });
   $('usersSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { usersPage = 1; loadUsers(); } });
