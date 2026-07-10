@@ -249,7 +249,7 @@ export function getAdminDashboardHtml(apiBase: string): string {
             <div class="panel-header">
               <div>
                 <h3>Feature flags</h3>
-                <p class="muted" style="margin-top:4px;font-size:.82rem">Enable or disable platform features — changes push to apps instantly.</p>
+                <p class="muted" style="margin-top:4px;font-size:.82rem">Toggle features for the mobile app — changes push instantly. SMM (Mobile) does not affect the hosted web flow.</p>
               </div>
             </div>
             <div class="panel-body padded" id="featuresBody"></div>

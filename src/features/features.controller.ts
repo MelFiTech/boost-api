@@ -19,7 +19,11 @@ export class FeaturesController {
   constructor(private readonly featuresService: FeaturesService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get all feature flags as a key/enabled map (used by app on launch)' })
+  @ApiOperation({
+    summary: 'Get feature flags as a key/enabled map (mobile app on launch)',
+    description:
+      'Consumed by the mobile app. The `smm` flag only hides SMM in the app — it does not disable the hosted SMM web flow or order APIs.',
+  })
   async getFlags() {
     return { success: true, data: await this.featuresService.getFlagMap() };
   }

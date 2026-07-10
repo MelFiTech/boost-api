@@ -31,6 +31,7 @@ model User {
   notifications UserNotification[]
   wallet        Wallet?
   billPayments  BillPayment[]
+  virtualNumberRentals VirtualNumberRental[]
   kyc           UserKyc?
   bankAccounts  BankAccount[]
   transactionPin TransactionPin?
@@ -346,6 +347,7 @@ model WalletTransaction {
 
   wallet      Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
   billPayment BillPayment?
+  virtualNumberRental VirtualNumberRental?
 
   @@index([walletId, createdAt])
   @@map("wallet_transactions")
@@ -360,6 +362,7 @@ enum WalletTransactionCategory {
   FUNDING
   SMM_ORDER
   BILL_PAYMENT
+  VIRTUAL_NUMBER
   WITHDRAWAL
   REFUND
   ADJUSTMENT
@@ -430,6 +433,62 @@ enum ProviderKind {
   FUNDING
   BILLS
   SMM
+  VIRTUAL_NUMBERS
+}
+
+// ---------- Virtual numbers (SMS OTP, etc.) ----------
+
+model VirtualNumberRental {
+  id                  String                    @id @default(cuid())
+  userId              String
+  productType         VirtualNumberProductType  @default(SMS_OTP)
+  smsServer           FleexaSmsServer           @default(SMS1)
+  provider            String                    @default("fleexa")
+  providerRequestId   String?
+  walletTransactionId String?                   @unique
+  countryName         String?
+  countryId           String?
+  appName             String?
+  projectId           String?
+  phoneNumber         String?
+  amountCharged       Decimal                   @db.Decimal(14, 2)
+  providerCost        Decimal?                  @db.Decimal(14, 2)
+  status              VirtualNumberRentalStatus @default(PENDING)
+  smsCode             String?
+  smsBody             String?
+  metadata            Json?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  user              User               @relation(fields: [userId], references: [id])
+  walletTransaction WalletTransaction? @relation(fields: [walletTransactionId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+  @@index([providerRequestId])
+  @@map("virtual_number_rentals")
+}
+
+enum VirtualNumberProductType {
+  SMS_OTP
+  EMAIL_OTP
+  RENT_NUMBER
+}
+
+enum FleexaSmsServer {
+  SMS1
+  SMS2
+  SMS3
+}
+
+enum VirtualNumberRentalStatus {
+  PENDING
+  WAITING
+  RECEIVED
+  CANCELLED
+  EXPIRED
+  FAILED
+  REFUNDED
 }
 
 // ---------- App settings (support links, etc.) ----------

@@ -18,6 +18,7 @@ import { PinModule } from './pin/pin.module';
 import { AdminUiModule } from './admin-ui/admin-ui.module';
 import { NotificationPreferencesModule } from './notification-preferences/notification-preferences.module';
 import { StorageModule } from './storage/storage.module';
+import { VirtualNumbersModule } from './virtual-numbers/virtual-numbers.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SMMService } from './services/smm.service';
@@ -60,6 +61,7 @@ import { LoggerMiddleware } from './middleware/logger.middleware';
     AdminUiModule,
     NotificationPreferencesModule,
     StorageModule,
+    VirtualNumbersModule,
   ],
   controllers: [AppController, SMMController, OrdersController, PaymentController, AdminOrdersController, AdminController, UserController, UserOrdersController],
   providers: [AppService, SMMService, PlatformService, OrdersService, PaymentService, NotificationService, UserService, SmmstoneService, AdminDashboardService, AdminOrdersService],

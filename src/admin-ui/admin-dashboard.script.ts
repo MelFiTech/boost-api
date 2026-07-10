@@ -1106,7 +1106,9 @@ export function getAdminDashboardScript(apiBase: string): string {
       const res = await apiFetch('/admin/features');
       const flags = res.data || [];
       $('featuresBody').innerHTML = flags.map((f) =>
-        '<div class="flag-row"><div class="flag-info"><h4>' + f.name + ' <span class="muted">(' + f.key + ')</span></h4><p>' + (f.description || '') + '</p>' +
+        '<div class="flag-row"><div class="flag-info"><h4>' + f.name + ' <span class="muted">(' + f.key + ')</span>' +
+        (f.key === 'smm' ? ' <span class="badge badge-pending">Mobile only</span>' : '') +
+        '</h4><p>' + (f.description || '') + '</p>' +
         (f.updatedBy ? '<p class="muted" style="font-size:.76rem">Last updated by ' + f.updatedBy + ' · ' + fmtDate(f.updatedAt) + '</p>' : '') +
         '</div><div class="toggle ' + (f.enabled ? 'on' : '') + '" data-flag="' + f.key + '" onclick="toggleFlag(\\'' + f.key + '\\',' + !f.enabled + ')"></div></div>'
       ).join('') || '<div class="empty">No feature flags configured</div>';

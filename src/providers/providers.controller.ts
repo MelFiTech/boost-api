@@ -4,6 +4,8 @@ import { IsEnum, IsIn, IsString } from 'class-validator';
 import { ProviderKind } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SmmProviderRegistryService } from '../smm/smm-provider.registry';
+import { VirtualNumberProviderRegistryService } from '../virtual-numbers/virtual-number.registry';
+import { FleexaVirtualNumberProvider } from '../virtual-numbers/fleexa/fleexa-virtual-number.provider';
 import { NyraFundingRail } from './nyra/nyra.types';
 import { NyraApiService } from './nyra/nyra-api.service';
 import { ProviderRegistryService } from './provider-registry.service';
@@ -29,16 +31,21 @@ export class AdminProvidersController {
   constructor(
     private readonly registry: ProviderRegistryService,
     private readonly smmRegistry: SmmProviderRegistryService,
+    private readonly virtualNumberRegistry: VirtualNumberProviderRegistryService,
+    private readonly fleexaProvider: FleexaVirtualNumberProvider,
     private readonly nyraApi: NyraApiService,
   ) {}
 
   @Get()
   @ApiOperation({ summary: 'List provider configs and registered providers' })
   async listProviders() {
-    const [fundingBillsConfigs, smmConfigs, activeSmmProvider] = await Promise.all([
+    const [fundingBillsConfigs, smmConfigs, virtualConfigs, activeSmmProvider, activeVirtualProvider] =
+      await Promise.all([
       this.registry.listConfigs(),
       this.smmRegistry.listConfigs(),
+      this.virtualNumberRegistry.listConfigs(),
       this.smmRegistry.getActiveSlug(),
+      this.virtualNumberRegistry.getActiveSlug(),
     ]);
 
     return {
@@ -47,9 +54,11 @@ export class AdminProvidersController {
         registered: {
           ...this.registry.registeredProviders(),
           SMM: this.smmRegistry.registeredSlugs(),
+          VIRTUAL_NUMBERS: this.virtualNumberRegistry.registeredSlugs(),
         },
-        configs: [...fundingBillsConfigs, ...smmConfigs],
+        configs: [...fundingBillsConfigs, ...smmConfigs, ...virtualConfigs],
         activeSmmProvider,
+        activeVirtualNumbersProvider: activeVirtualProvider,
         nyraFundingRail: await this.registry.getNyraFundingRail(),
         nyraFundingRails: this.registry.listNyraFundingRails(),
       },
@@ -57,15 +66,36 @@ export class AdminProvidersController {
   }
 
   @Patch('active')
-  @ApiOperation({ summary: 'Switch the active provider for FUNDING, BILLS, or SMM at runtime' })
+  @ApiOperation({ summary: 'Switch the active provider for FUNDING, BILLS, SMM, or VIRTUAL_NUMBERS' })
   async setActive(@Body() dto: SetActiveProviderDto) {
     if (dto.kind === ProviderKind.SMM) {
       const config = await this.smmRegistry.setActiveProvider(dto.provider);
       return { success: true, data: config };
     }
+    if (dto.kind === ProviderKind.VIRTUAL_NUMBERS) {
+      const config = await this.virtualNumberRegistry.setActiveProvider(dto.provider);
+      return { success: true, data: config };
+    }
 
     const config = await this.registry.setActiveProvider(dto.kind, dto.provider);
     return { success: true, data: config };
+  }
+
+  @Get('fleexa/balance')
+  @ApiOperation({ summary: 'Fleexa reseller wallet balance (NGN)' })
+  async getFleexaBalance() {
+    if (!this.fleexaProvider.isConfigured()) {
+      return { success: false, error: 'FLEEXA_API_KEY is not configured' };
+    }
+    try {
+      const balance = await this.fleexaProvider.getBalance();
+      return { success: true, data: { balance, currency: 'NGN' } };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   @Get('nyra/funding-rail')

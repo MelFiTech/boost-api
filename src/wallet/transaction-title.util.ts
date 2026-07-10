@@ -72,6 +72,12 @@ export function formatTransactionTitle(input: TransactionTitleInput): string {
       if (platform && service) return `${platform} ${service}`;
       return 'Boost order';
     }
+    case WalletTransactionCategory.VIRTUAL_NUMBER: {
+      const appName = readMetaString(meta, 'appName');
+      const countryName = readMetaString(meta, 'countryName');
+      if (appName && countryName) return `SMS OTP · ${appName}`;
+      return 'Virtual number';
+    }
     case WalletTransactionCategory.ADJUSTMENT:
       if (readMetaString(meta, 'source') === 'admin') {
         return 'Wallet top up';

@@ -20,7 +20,11 @@ class UpdateAppSettingsDto {
   @IsString()
   aboutPageUrl?: string;
 
-  @ApiPropertyOptional({ example: 'https://boostlab.ng/boost', description: 'Hosted SMM web flow URL opened by the mobile app' })
+  @ApiPropertyOptional({
+    example: 'https://boostlab.ng/boost',
+    description:
+      'Hosted SMM web flow URL. Independent of the mobile `smm` feature flag — web keeps working when SMM is hidden in the app.',
+  })
   @IsOptional()
   @IsString()
   smmWebUrl?: string;
